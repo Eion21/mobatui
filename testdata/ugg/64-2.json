@@ -1,0 +1,45 @@
+{
+  "champion_id": 64,
+  "champion_key": "LeeSin",
+  "patch": "15.20",
+  "position": 2,
+  "overview": [55210, 28430],
+  "itemizations": {
+    "individual": [
+      [6610, 31000, 16400],
+      [3071, 26000, 13600],
+      [6333, 18000, 9450],
+      [3156, 12000, 6290],
+      [3161, 8000, 4200],
+      [3142, 5, 4]
+    ],
+    "boots": [
+      [3111, 30000, 15750],
+      [3047, 22000, 11440]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8100,
+      "keystone": 8010,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8143, 8133],
+      "shards": [5005, 5005, 5002],
+      "stats": [28000, 14700]
+    },
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8300,
+      "keystone": 8010,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8345, 8347],
+      "shards": [5005, 5005, 5002],
+      "stats": [11000, 5700]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQEQEREEWWRWW", 18200, 9600],
+    ["QWEQQRQWQWRWWEEREE", 8300, 4300]
+  ]
+}

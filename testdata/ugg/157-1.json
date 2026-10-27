@@ -1,0 +1,44 @@
+{
+  "champion_id": 157,
+  "champion_key": "Yasuo",
+  "patch": "15.20",
+  "position": 1,
+  "overview": [15200, 7630],
+  "itemizations": {
+    "individual": [
+      [6673, 7300, 3810],
+      [3071, 6800, 3530],
+      [3153, 5100, 2620],
+      [3053, 3200, 1620],
+      [6333, 2800, 1410]
+    ],
+    "boots": [
+      [3006, 10800, 5500],
+      [3047, 3200, 1620]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8400,
+      "keystone": 8008,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8446, 8453],
+      "shards": [5005, 5005, 5002],
+      "stats": [7000, 3600]
+    },
+    {
+      "primary_tree": 8400,
+      "secondary_tree": 8000,
+      "keystone": 8437,
+      "primary": [8446, 8453, 8473],
+      "secondary": [9101, 9105],
+      "shards": [5005, 5002, 5001],
+      "stats": [2900, 1470]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQEQEREEWWRWW", 6100, 3100],
+    ["QWEQQRQWQWRWWEEREE", 2600, 1310]
+  ]
+}

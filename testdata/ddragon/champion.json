@@ -1,0 +1,105 @@
+{
+  "type": "champion",
+  "format": "standAloneComplex",
+  "version": "15.20.1",
+  "data": {
+    "Ahri": {
+      "version": "15.20.1",
+      "id": "Ahri",
+      "key": "103",
+      "name": "Ahri",
+      "title": "la Zorra de las Nueve Colas"
+    },
+    "Caitlyn": {
+      "version": "15.20.1",
+      "id": "Caitlyn",
+      "key": "51",
+      "name": "Caitlyn",
+      "title": "la Sheriff de Piltover"
+    },
+    "Darius": {
+      "version": "15.20.1",
+      "id": "Darius",
+      "key": "122",
+      "name": "Darius",
+      "title": "la Mano de Noxus"
+    },
+    "Ezreal": {
+      "version": "15.20.1",
+      "id": "Ezreal",
+      "key": "81",
+      "name": "Ezreal",
+      "title": "el Explorador Pródigo"
+    },
+    "Garen": {
+      "version": "15.20.1",
+      "id": "Garen",
+      "key": "86",
+      "name": "Garen",
+      "title": "el Poder de Demacia"
+    },
+    "Jhin": {
+      "version": "15.20.1",
+      "id": "Jhin",
+      "key": "202",
+      "name": "Jhin",
+      "title": "el Virtuoso"
+    },
+    "Jinx": {
+      "version": "15.20.1",
+      "id": "Jinx",
+      "key": "222",
+      "name": "Jinx",
+      "title": "la Ametralladora Loka"
+    },
+    "LeeSin": {
+      "version": "15.20.1",
+      "id": "LeeSin",
+      "key": "64",
+      "name": "Lee Sin",
+      "title": "el Monje Ciego"
+    },
+    "Lux": {
+      "version": "15.20.1",
+      "id": "Lux",
+      "key": "99",
+      "name": "Lux",
+      "title": "la Dama Luminosa"
+    },
+    "Malphite": {
+      "version": "15.20.1",
+      "id": "Malphite",
+      "key": "54",
+      "name": "Malphite",
+      "title": "el Fragmento del Monolito"
+    },
+    "Thresh": {
+      "version": "15.20.1",
+      "id": "Thresh",
+      "key": "412",
+      "name": "Thresh",
+      "title": "el Carcelero de las Cadenas"
+    },
+    "Vi": {
+      "version": "15.20.1",
+      "id": "Vi",
+      "key": "254",
+      "name": "Vi",
+      "title": "la Guardiana de Piltover"
+    },
+    "Yasuo": {
+      "version": "15.20.1",
+      "id": "Yasuo",
+      "key": "157",
+      "name": "Yasuo",
+      "title": "el Impío"
+    },
+    "Zed": {
+      "version": "15.20.1",
+      "id": "Zed",
+      "key": "238",
+      "name": "Zed",
+      "title": "el Maestro de las Sombras"
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "champion_id": 86,
+  "champion_key": "Garen",
+  "patch": "15.20",
+  "position": 1,
+  "overview": [35600, 18300],
+  "itemizations": {
+    "individual": [
+      [6631, 21000, 11000],
+      [6333, 15000, 7830],
+      [3053, 12000, 6210],
+      [3075, 8000, 4090],
+      [3143, 6000, 3060]
+    ],
+    "boots": [
+      [3047, 20000, 10300],
+      [3111, 13000, 6720]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8400,
+      "keystone": 8010,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8446, 8453],
+      "shards": [5008, 5002, 5001],
+      "stats": [16000, 8500]
+    },
+    {
+      "primary_tree": 8400,
+      "secondary_tree": 8000,
+      "keystone": 8437,
+      "primary": [8446, 8453, 8473],
+      "secondary": [9101, 9105],
+      "shards": [5008, 5002, 5001],
+      "stats": [7000, 3610]
+    }
+  ],
+  "skills": [
+    ["EQWEEREQERQQWWRWW", 14000, 7280],
+    ["QWEQQRQWQWRWWEEREE", 5100, 2620]
+  ]
+}

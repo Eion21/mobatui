@@ -1,0 +1,1093 @@
+{
+ "type": "com.riotgames.league.summoner-spells",
+ "version": "15.24.1",
+ "data": {
+  "SummonerBarrier": {
+   "id": "SummonerBarrier",
+   "name": "Barrera",
+   "description": "Obtienes un escudo temporal.",
+   "tooltip": "Obtiene un <shield>escudo de {{ shieldstrength }}</shield> durante {{ shieldduration }} s.",
+   "maxrank": 1,
+   "cooldown": [
+    180
+   ],
+   "cooldownBurn": "180",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "21",
+   "summonerLevel": 4,
+   "modes": [
+    "ULTBOOK",
+    "PRACTICETOOL",
+    "URF",
+    "NEXUSBLITZ",
+    "ONEFORALL",
+    "WIPMODEWIP",
+    "RUBY",
+    "SWIFTPLAY",
+    "KIWI",
+    "ARAM",
+    "CLASSIC",
+    "TUTORIAL",
+    "BRAWL",
+    "FIRSTBLOOD",
+    "WIPMODEWIP3",
+    "RUBY_TRIAL_2",
+    "RUBY_TRIAL_3",
+    "RUBY_TRIAL_1",
+    "ASSASSINATE",
+    "ARSR",
+    "DOOMBOTSTEEMO"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    1200
+   ],
+   "rangeBurn": "1200",
+   "image": {
+    "full": "SummonerBarrier.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 0,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerBoost": {
+   "id": "SummonerBoost",
+   "name": "Limpiar",
+   "description": "Elimina todas las inhabilitaciones (excepto la supresión y los levantamientos en el aire) y efectos de hechizos de invocador que afectan al campeón, y otorga tenacidad.",
+   "tooltip": "Elimina todos los efectos de control de adversario (menos la <keyword>supresión</keyword> y los <keyword>levantamientos en el aire</keyword>) y los efectos negativos de hechizos de invocador que te afecten y otorga un {{ tenacityvalue*100 }}% de tenacidad durante {{ tenacityduration }} s.",
+   "maxrank": 1,
+   "cooldown": [
+    240
+   ],
+   "cooldownBurn": "240",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "1",
+   "summonerLevel": 9,
+   "modes": [
+    "ULTBOOK",
+    "PRACTICETOOL",
+    "URF",
+    "NEXUSBLITZ",
+    "ONEFORALL",
+    "WIPMODEWIP",
+    "RUBY",
+    "SWIFTPLAY",
+    "KIWI",
+    "ARAM",
+    "CLASSIC",
+    "TUTORIAL",
+    "BRAWL",
+    "FIRSTBLOOD",
+    "WIPMODEWIP3",
+    "RUBY_TRIAL_2",
+    "RUBY_TRIAL_3",
+    "RUBY_TRIAL_1",
+    "ARSR",
+    "DOOMBOTSTEEMO"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    200
+   ],
+   "rangeBurn": "200",
+   "image": {
+    "full": "SummonerBoost.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 48,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerDot": {
+   "id": "SummonerDot",
+   "name": "Prender",
+   "description": "Inflige daño verdadero a un campeón enemigo objetivo a lo largo del tiempo y reduce los efectos de curación que este reciba mientras dure el efecto.",
+   "tooltip": "Inflige <trueDamage>{{ tooltiptruedamagecalculation }} de daño verdadero</trueDamage> a un campeón enemigo objetivo durante 5 s y aplica un <keyword>{{ grievousamount*100 }}% de heridas graves</keyword> mientras dure.<br /><br /><keyword>Heridas</keyword>: Reduce los efectos de curación y regeneración.",
+   "maxrank": 1,
+   "cooldown": [
+    180
+   ],
+   "cooldownBurn": "180",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "14",
+   "summonerLevel": 9,
+   "modes": [
+    "ULTBOOK",
+    "PRACTICETOOL",
+    "URF",
+    "NEXUSBLITZ",
+    "ONEFORALL",
+    "WIPMODEWIP",
+    "RUBY",
+    "SWIFTPLAY",
+    "KIWI",
+    "ARAM",
+    "CLASSIC",
+    "TUTORIAL",
+    "BRAWL",
+    "FIRSTBLOOD",
+    "WIPMODEWIP3",
+    "RUBY_TRIAL_2",
+    "RUBY_TRIAL_3",
+    "RUBY_TRIAL_1",
+    "ASSASSINATE",
+    "ARSR",
+    "DOOMBOTSTEEMO"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    600
+   ],
+   "rangeBurn": "600",
+   "image": {
+    "full": "SummonerDot.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 192,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerExhaust": {
+   "id": "SummonerExhaust",
+   "name": "Extenuación",
+   "description": "Ralentiza al campeón enemigo objetivo y reduce el daño que inflige.",
+   "tooltip": "<keyword>Ralentiza</keyword> al campeón enemigo objetivo un {{ slow }}% y reduce un {{ damagereduction }}% el daño que inflige durante {{ debuffduration }} s.",
+   "maxrank": 1,
+   "cooldown": [
+    240
+   ],
+   "cooldownBurn": "240",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "3",
+   "summonerLevel": 4,
+   "modes": [
+    "URF",
+    "RUBY",
+    "WIPMODEWIP",
+    "ARAM",
+    "ONEFORALL",
+    "NEXUSBLITZ",
+    "PRACTICETOOL",
+    "DOOMBOTSTEEMO",
+    "TUTORIAL",
+    "ARSR",
+    "CLASSIC",
+    "ULTBOOK",
+    "RUBY_TRIAL_2",
+    "SWIFTPLAY",
+    "RUBY_TRIAL_1",
+    "WIPMODEWIP3",
+    "RUBY_TRIAL_3"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    650
+   ],
+   "rangeBurn": "650",
+   "image": {
+    "full": "SummonerExhaust.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 240,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerFlash": {
+   "id": "SummonerFlash",
+   "name": "Destello",
+   "description": "Te teleporta a una corta distancia hacia el cursor.",
+   "tooltip": "Te teleporta a una corta distancia hacia el cursor.",
+   "maxrank": 1,
+   "cooldown": [
+    300
+   ],
+   "cooldownBurn": "300",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     400
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "400",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "4",
+   "summonerLevel": 7,
+   "modes": [
+    "CLASSIC",
+    "NEXUSBLITZ",
+    "ARAM",
+    "FIRSTBLOOD",
+    "PRACTICETOOL",
+    "BRAWL",
+    "WIPMODEWIP",
+    "URF",
+    "WIPMODEWIP3",
+    "SNOWURF",
+    "SWIFTPLAY",
+    "TUTORIAL",
+    "ONEFORALL",
+    "ULTBOOK",
+    "RUBY_TRIAL_3",
+    "WIPMODEWIP4",
+    "RUBY",
+    "DOOMBOTSTEEMO",
+    "KIWI",
+    "RUBY_TRIAL_2",
+    "RUBY_TRIAL_1",
+    "ARSR"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    425
+   ],
+   "rangeBurn": "425",
+   "image": {
+    "full": "SummonerFlash.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 288,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerHaste": {
+   "id": "SummonerHaste",
+   "name": "Fantasmal",
+   "description": "Obtiene velocidad de movimiento e ignora la colisión con unidades durante este tiempo.",
+   "tooltip": "Obtiene un <speed>{{ movespeedmod }} de velocidad de movimiento</speed> y se vuelve <keyword>Fantasmal</keyword> durante {{ duration }} s.<br /><br /><keyword>Fantasmal</keyword>: ignora la colisión con otras unidades.",
+   "maxrank": 1,
+   "cooldown": [
+    240
+   ],
+   "cooldownBurn": "240",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "6",
+   "summonerLevel": 1,
+   "modes": [
+    "ULTBOOK",
+    "PRACTICETOOL",
+    "URF",
+    "NEXUSBLITZ",
+    "ONEFORALL",
+    "RUBY",
+    "TUTORIAL_MODULE_2",
+    "SWIFTPLAY",
+    "KIWI",
+    "ARAM",
+    "CLASSIC",
+    "TUTORIAL",
+    "TUTORIAL_MODULE_1",
+    "BRAWL",
+    "FIRSTBLOOD",
+    "RUBY_TRIAL_2",
+    "RUBY_TRIAL_3",
+    "RUBY_TRIAL_1",
+    "ASSASSINATE",
+    "ARSR",
+    "DOOMBOTSTEEMO"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    200
+   ],
+   "rangeBurn": "200",
+   "image": {
+    "full": "SummonerHaste.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 336,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerHeal": {
+   "id": "SummonerHeal",
+   "name": "Curar",
+   "description": "Restaura vida y otorga velocidad de movimiento adicional tanto a ti como al campeón aliado objetivo.",
+   "tooltip": "Restaura <healing>{{ totalheal }} de vida</healing> y otorga un <speed>{{ movespeed*100 }}% de velocidad de movimiento</speed> durante {{ movespeedduration }} s a ti y al campeón aliado seleccionado.<br /><br /><rules>Si no se fija un objetivo, se lanzará sobre el campeón aliado cercano más herido.<br />La curación se reduce a la mitad en las unidades afectadas hace poco por Curar.</rules>",
+   "maxrank": 1,
+   "cooldown": [
+    240
+   ],
+   "cooldownBurn": "240",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "7",
+   "summonerLevel": 1,
+   "modes": [
+    "ULTBOOK",
+    "PRACTICETOOL",
+    "URF",
+    "NEXUSBLITZ",
+    "ONEFORALL",
+    "WIPMODEWIP",
+    "RUBY",
+    "TUTORIAL_MODULE_2",
+    "SWIFTPLAY",
+    "KIWI",
+    "ARAM",
+    "CLASSIC",
+    "TUTORIAL",
+    "TUTORIAL_MODULE_1",
+    "BRAWL",
+    "WIPMODEWIP3",
+    "RUBY_TRIAL_2",
+    "RUBY_TRIAL_3",
+    "RUBY_TRIAL_1",
+    "ASSASSINATE",
+    "ARSR",
+    "DOOMBOTSTEEMO"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    875
+   ],
+   "rangeBurn": "875",
+   "image": {
+    "full": "SummonerHeal.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 384,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerMana": {
+   "id": "SummonerMana",
+   "name": "Claridad",
+   "description": "Restaura maná a tu campeón y al campeón aliado.",
+   "tooltip": "Restaura un {{ e1 }}% del maná máximo a tu campeón y un {{ e2 }}% a los aliados cercanos.",
+   "maxrank": 1,
+   "cooldown": [
+    240
+   ],
+   "cooldownBurn": "240",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     50
+    ],
+    [
+     25
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "50",
+    "25",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "13",
+   "summonerLevel": 6,
+   "modes": [
+    "KIWI",
+    "ARAM",
+    "FIRSTBLOOD"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    600
+   ],
+   "rangeBurn": "600",
+   "image": {
+    "full": "SummonerMana.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 432,
+    "y": 0,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerSmite": {
+   "id": "SummonerSmite",
+   "name": "Aplastar",
+   "description": "Inflige daño verdadero a un monstruo o súbdito.",
+   "tooltip": "Inflige <trueDamage>{{ smitebasedamage }} de daño verdadero</trueDamage> al monstruo gigante objetivo o súbdito en una calle.<br /><br />Inflige <trueDamage>{{ firstpvpdamage }} de daño verdadero</trueDamage> a las mascotas de campeones.",
+   "maxrank": 1,
+   "cooldown": [
+    15
+   ],
+   "cooldownBurn": "15",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     15
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "15",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "11",
+   "summonerLevel": 3,
+   "modes": [
+    "DOOMBOTSTEEMO",
+    "PRACTICETOOL",
+    "CLASSIC",
+    "SWIFTPLAY",
+    "URF",
+    "NEXUSBLITZ",
+    "ONEFORALL",
+    "TUTORIAL",
+    "ARSR"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "2",
+   "range": [
+    500
+   ],
+   "rangeBurn": "500",
+   "image": {
+    "full": "SummonerSmite.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 96,
+    "y": 48,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerSnowball": {
+   "id": "SummonerSnowball",
+   "name": "Marca",
+   "description": "Lanzas una bola de nieve en línea recta hacia tus enemigos. Si alcanzas a uno, queda marcado, lo que otorga visión verdadera y, a continuación, tu campeón puede desplazarse con rapidez hasta él.",
+   "tooltip": "Lanzas una bola de nieve a larga distancia que inflige {{ tooltipdamagetotal }} de daño verdadero a la primera unidad enemiga golpeada y otorga <span class=\"coloree91d7\">visión verdadera</span> del objetivo. Si golpea a un enemigo, puedes volver a lanzar la habilidad durante {{ e3 }} s para deslizarte rápidamente hasta la unidad marcada e infligir {{ tooltipdamagetotal }} de daño verdadero adicional. Deslizarte hacia el enemigo reducirá un {{ e4 }}% el enfriamiento de Marca.<br /><br /><span class=\"colorFFFF00\">Los escudos de hechizos y la mitigación de proyectiles no detienen los proyectiles de Marca.</span>",
+   "maxrank": 1,
+   "cooldown": [
+    80
+   ],
+   "cooldownBurn": "80",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     10
+    ],
+    [
+     5
+    ],
+    [
+     3
+    ],
+    [
+     25
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "10",
+    "5",
+    "3",
+    "25",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "32",
+   "summonerLevel": 6,
+   "modes": [
+    "ARAM",
+    "FIRSTBLOOD",
+    "WIPMODEWIP5",
+    "KIWI"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    1600
+   ],
+   "rangeBurn": "1600",
+   "image": {
+    "full": "SummonerSnowball.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 192,
+    "y": 48,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  },
+  "SummonerTeleport": {
+   "id": "SummonerTeleport",
+   "name": "Teleportar",
+   "description": "Tras una breve canalización, te vuelves inalcanzable y te desplazas hasta una unidad aliada. Evoluciona a Teleportar desatado, que aumenta notablemente la velocidad del desplazamiento. ",
+   "tooltip": "Tras {{ channelduration }} s de canalización, se vuelve <keyword>inalcanzable</keyword> y se desplaza hasta el súbdito, estructura o guardián aliado objetivo. <br /><br />A los {{ upgrademinute }} min evoluciona a Teleportar desatado, que aumenta notablemente la velocidad del desplazamiento.",
+   "maxrank": 1,
+   "cooldown": [
+    300
+   ],
+   "cooldownBurn": "300",
+   "cost": [
+    0
+   ],
+   "costBurn": "0",
+   "datavalues": {},
+   "effect": [
+    null,
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ],
+    [
+     0
+    ]
+   ],
+   "effectBurn": [
+    null,
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+   ],
+   "vars": [],
+   "key": "12",
+   "summonerLevel": 7,
+   "modes": [
+    "TUTORIAL",
+    "ULTBOOK",
+    "ARSR",
+    "CLASSIC",
+    "RUBY_TRIAL_2",
+    "ASSASSINATE",
+    "PRACTICETOOL",
+    "DOOMBOTSTEEMO",
+    "ONEFORALL",
+    "SWIFTPLAY",
+    "WIPMODEWIP4",
+    "RUBY",
+    "RUBY_TRIAL_3",
+    "RUBY_TRIAL_1"
+   ],
+   "costType": "Sin coste",
+   "maxammo": "-1",
+   "range": [
+    25000
+   ],
+   "rangeBurn": "25000",
+   "image": {
+    "full": "SummonerTeleport.png",
+    "sprite": "spell0.png",
+    "group": "spell",
+    "x": 240,
+    "y": 48,
+    "w": 48,
+    "h": 48
+   },
+   "resource": "Sin coste"
+  }
+ }
+}

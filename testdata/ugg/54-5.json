@@ -1,0 +1,44 @@
+{
+  "champion_id": 54,
+  "champion_key": "Malphite",
+  "patch": "15.20",
+  "position": 5,
+  "overview": [8900, 4530],
+  "itemizations": {
+    "individual": [
+      [3190, 3600, 1840],
+      [3075, 2900, 1470],
+      [3143, 2100, 1060],
+      [3107, 1700, 862],
+      [3222, 1300, 660]
+    ],
+    "boots": [
+      [3047, 4800, 2440],
+      [3117, 2900, 1470]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8400,
+      "secondary_tree": 8300,
+      "keystone": 8437,
+      "primary": [8446, 8453, 8473],
+      "secondary": [8345, 8347],
+      "shards": [5008, 5002, 5001],
+      "stats": [4100, 2100]
+    },
+    {
+      "primary_tree": 8300,
+      "secondary_tree": 8400,
+      "keystone": 8351,
+      "primary": [8313, 8345, 8347],
+      "secondary": [8446, 8473],
+      "shards": [5008, 5002, 5001],
+      "stats": [1900, 962]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQWQWRWWEEREE", 3700, 1880],
+    ["EQWEEREQERQQWWRWW", 1500, 761]
+  ]
+}

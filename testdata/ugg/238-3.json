@@ -1,0 +1,44 @@
+{
+  "champion_id": 238,
+  "champion_key": "Zed",
+  "patch": "15.20",
+  "position": 3,
+  "overview": [39800, 20100],
+  "itemizations": {
+    "individual": [
+      [6692, 14500, 7610],
+      [3142, 12000, 6250],
+      [6694, 9800, 5090],
+      [3147, 7600, 3910],
+      [3071, 6900, 3530]
+    ],
+    "boots": [
+      [3158, 24000, 12200],
+      [3111, 9800, 4990]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8100,
+      "secondary_tree": 8000,
+      "keystone": 8112,
+      "primary": [8126, 8143, 8135],
+      "secondary": [9101, 9105],
+      "shards": [5008, 5008, 5002],
+      "stats": [17000, 8770]
+    },
+    {
+      "primary_tree": 8100,
+      "secondary_tree": 8200,
+      "keystone": 8128,
+      "primary": [8126, 8143, 8135],
+      "secondary": [8210, 8233],
+      "shards": [5008, 5008, 5002],
+      "stats": [7900, 4040]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQEQEREEWWRWW", 14000, 7210],
+    ["QWEQQRQWQWRWWEEREE", 7300, 3710]
+  ]
+}

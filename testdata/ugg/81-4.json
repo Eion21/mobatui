@@ -1,0 +1,44 @@
+{
+  "champion_id": 81,
+  "champion_key": "Ezreal",
+  "patch": "15.20",
+  "position": 4,
+  "overview": [36700, 18600],
+  "itemizations": {
+    "individual": [
+      [3070, 22000, 11300],
+      [3042, 19000, 9790],
+      [3031, 13500, 6970],
+      [6672, 8200, 4210],
+      [3094, 6100, 3110]
+    ],
+    "boots": [
+      [3158, 25000, 12800],
+      [3006, 6800, 3450]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8300,
+      "keystone": 8005,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8345, 8347],
+      "shards": [5008, 5007, 5002],
+      "stats": [15000, 7760]
+    },
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8200,
+      "keystone": 8008,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8226, 8233],
+      "shards": [5008, 5007, 5002],
+      "stats": [8200, 4190]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQEQEREEWWRWW", 13800, 7060],
+    ["QWEQQRQWQWRWWEEREE", 7100, 3610]
+  ]
+}

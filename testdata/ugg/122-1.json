@@ -1,0 +1,45 @@
+{
+  "champion_id": 122,
+  "champion_key": "Darius",
+  "patch": "15.20",
+  "position": 1,
+  "overview": [38900, 20050],
+  "itemizations": {
+    "individual": [
+      [6631, 24000, 12720],
+      [3071, 21000, 11050],
+      [3053, 13000, 6820],
+      [3068, 9000, 4650],
+      [6333, 7000, 3610],
+      [3026, 40, 28]
+    ],
+    "boots": [
+      [3047, 21000, 10950],
+      [3111, 15000, 7900]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8400,
+      "keystone": 8010,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8446, 8453],
+      "shards": [5005, 5008, 5002],
+      "stats": [20000, 10500]
+    },
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8100,
+      "keystone": 8010,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8143, 8133],
+      "shards": [5005, 5008, 5002],
+      "stats": [6800, 3500]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQWQWRWWEEREE", 15900, 8300],
+    ["QEWQQRQWQWRWWEEREE", 5200, 2710]
+  ]
+}

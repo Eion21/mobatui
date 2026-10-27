@@ -1,0 +1,56 @@
+{
+  "champion_id": 103,
+  "champion_key": "Ahri",
+  "patch": "15.20",
+  "position": 3,
+  "overview": [48213, 24871],
+  "itemizations": {
+    "individual": [
+      [6653, 39210, 21000],
+      [4645, 28003, 14871],
+      [3089, 15002, 8090],
+      [4628, 12050, 6420],
+      [6655, 9000, 4698],
+      [3157, 3, 3],
+      [3135, 120, 70]
+    ],
+    "boots": [
+      [3020, 31022, 16133],
+      [3111, 9200, 4830],
+      [3158, 150, 76]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8200,
+      "secondary_tree": 8100,
+      "keystone": 8229,
+      "primary": [8226, 8210, 8237],
+      "secondary": [8126, 8135],
+      "shards": [5008, 5008, 5001],
+      "stats": [21020, 11043]
+    },
+    {
+      "primary_tree": 8100,
+      "secondary_tree": 8200,
+      "keystone": 8112,
+      "primary": [8126, 8143, 8135],
+      "secondary": [8210, 8237],
+      "shards": [5008, 5008, 5001],
+      "stats": [9840, 5240]
+    },
+    {
+      "primary_tree": 8400,
+      "secondary_tree": 8100,
+      "keystone": 8437,
+      "primary": [8446, 8453, 8473],
+      "secondary": [8143, 8133],
+      "shards": [5008, 5002, 5002],
+      "stats": [50, 34]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQWQWRWWEEREE", 12804, 6720],
+    ["QEWQQRQWQWRWWEEREE", 3100, 1630]
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "champion_id": 254,
+  "champion_key": "Vi",
+  "patch": "15.20",
+  "position": 2,
+  "overview": [28900, 14800],
+  "itemizations": {
+    "individual": [
+      [6610, 16000, 8400],
+      [6333, 11500, 5970],
+      [3071, 9800, 5050],
+      [3053, 7200, 3690],
+      [3156, 5100, 2590]
+    ],
+    "boots": [
+      [3111, 17000, 8710],
+      [3047, 9300, 4720]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8000,
+      "secondary_tree": 8100,
+      "keystone": 8010,
+      "primary": [9101, 9105, 8014],
+      "secondary": [8143, 8133],
+      "shards": [5005, 5005, 5002],
+      "stats": [13000, 6780]
+    },
+    {
+      "primary_tree": 8100,
+      "secondary_tree": 8000,
+      "keystone": 8112,
+      "primary": [8126, 8143, 8135],
+      "secondary": [9101, 8014],
+      "shards": [5005, 5005, 5002],
+      "stats": [6100, 3120]
+    }
+  ],
+  "skills": [
+    ["QWEQQRQEQEREEWWRWW", 10800, 5590],
+    ["QWEQQRQWQWRWWEEREE", 4600, 2340]
+  ]
+}

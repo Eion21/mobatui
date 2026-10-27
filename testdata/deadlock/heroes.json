@@ -1,0 +1,18 @@
+{
+  "data": {
+    "Abrams":   {"id": "1",  "name": "Abrams",     "title": ""},
+    "Bebop":    {"id": "2",  "name": "Bebop",      "title": ""},
+    "Dynamo":   {"id": "3",  "name": "Dynamo",     "title": ""},
+    "GreyTalon": {"id": "4", "name": "Grey Talon", "title": ""},
+    "Haze":     {"id": "5",  "name": "Haze",       "title": ""},
+    "Infernus": {"id": "6",  "name": "Infernus",   "title": ""},
+    "LadyGeist": {"id": "7", "name": "Lady Geist", "title": ""},
+    "Lash":     {"id": "8",  "name": "Lash",       "title": ""},
+    "McGinnis": {"id": "9",  "name": "McGinnis",   "title": ""},
+    "Seven":    {"id": "10", "name": "Seven",      "title": ""},
+    "Shiv":     {"id": "11", "name": "Shiv",       "title": ""},
+    "Vindicta": {"id": "12", "name": "Vindicta",   "title": ""},
+    "Wraith":   {"id": "13", "name": "Wraith",     "title": ""},
+    "Yamato":   {"id": "14", "name": "Yamato",     "title": ""}
+  }
+}

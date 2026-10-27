@@ -1,0 +1,22 @@
+# Caché runtime y dumps descargados
+data/
+
+# Binarios
+/builds
+*.exe
+
+# Entorno Go
+*.test
+*.out
+
+# Grafo de conocimiento (se regenera)
+graphify-out/
+
+# ZCode
+.zcode/
+.zwork/
+
+# Artefactos de agente (especificaciones y logbooks de trabajo)
+odd/
+.atl/
+.claude/

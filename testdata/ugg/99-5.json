@@ -1,0 +1,44 @@
+{
+  "champion_id": 99,
+  "champion_key": "Lux",
+  "patch": "15.20",
+  "position": 5,
+  "overview": [15600, 7900],
+  "itemizations": {
+    "individual": [
+      [6617, 5500, 2930],
+      [3504, 4800, 2510],
+      [3222, 3600, 1870],
+      [3107, 2900, 1500],
+      [3190, 2100, 1070]
+    ],
+    "boots": [
+      [3117, 7200, 3670],
+      [3009, 4900, 2480]
+    ]
+  },
+  "runes": [
+    {
+      "primary_tree": 8200,
+      "secondary_tree": 8300,
+      "keystone": 8214,
+      "primary": [8226, 8210, 8234],
+      "secondary": [8345, 8347],
+      "shards": [5008, 5008, 5001],
+      "stats": [6800, 3540]
+    },
+    {
+      "primary_tree": 8300,
+      "secondary_tree": 8400,
+      "keystone": 8351,
+      "primary": [8313, 8345, 8347],
+      "secondary": [8446, 8473],
+      "shards": [5008, 5008, 5001],
+      "stats": [3100, 1590]
+    }
+  ],
+  "skills": [
+    ["EQWEEREQERQQWWRWW", 6200, 3210],
+    ["QWEQQRQWQWRWWEEREE", 2400, 1210]
+  ]
+}

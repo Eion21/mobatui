@@ -1,0 +1,113 @@
+[
+  {
+    "id": 8000,
+    "key": "Precision",
+    "name": "Precisión",
+    "slots": [
+      {"runes": [
+        {"id": 8005, "name": "Prensa el ataque"},
+        {"id": 8008, "name": "Ritmo letal"},
+        {"id": 8010, "name": "Conquistador"}
+      ]},
+      {"runes": [
+        {"id": 9101, "name": "Triunfo"}
+      ]},
+      {"runes": [
+        {"id": 9105, "name": "Leyenda: Presteza"},
+        {"id": 9106, "name": "Leyenda: Tenacidad"}
+      ]},
+      {"runes": [
+        {"id": 8014, "name": "Golpe de gracia"},
+        {"id": 8017, "name": "Derribar"},
+        {"id": 8299, "name": "Última resistencia"}
+      ]}
+    ]
+  },
+  {
+    "id": 8100,
+    "key": "Domination",
+    "name": "Dominación",
+    "slots": [
+      {"runes": [
+        {"id": 8112, "name": "Electrocutar"},
+        {"id": 8128, "name": "Cosecha oscura"},
+        {"id": 9923, "name": "Granizo de cuchillas"}
+      ]},
+      {"runes": [
+        {"id": 8126, "name": "Golpe bajo"},
+        {"id": 8138, "name": "Sabor de sangre"},
+        {"id": 8143, "name": "Impacto súbito"}
+      ]},
+      {"runes": [
+        {"id": 8136, "name": "Coleccionista de globos oculares"},
+        {"id": 8139, "name": "Poro fantasma"}
+      ]},
+      {"runes": [
+        {"id": 8133, "name": "Cazador de tesoros"},
+        {"id": 8135, "name": "Cazador definitivo"}
+      ]}
+    ]
+  },
+  {
+    "id": 8200,
+    "key": "Sorcery",
+    "name": "Brujería",
+    "slots": [
+      {"runes": [
+        {"id": 8214, "name": "Invocar: Aery"},
+        {"id": 8229, "name": "Cometa arcano"},
+        {"id": 8230, "name": "Ímpetu de fase"}
+      ]},
+      {"runes": [
+        {"id": 8224, "name": "Orbe anulador"},
+        {"id": 8226, "name": "Banda de flujo de maná"},
+        {"id": 8275, "name": "Capa de nimbus"}
+      ]},
+      {"runes": [
+        {"id": 8210, "name": "Trascendencia"},
+        {"id": 8234, "name": "Celeridad"},
+        {"id": 8233, "name": "Enfoque absoluto"}
+      ]},
+      {"runes": [
+        {"id": 8237, "name": "Chamuscar"},
+        {"id": 8236, "name": "Tormenta inminente"}
+      ]}
+    ]
+  },
+  {
+    "id": 8300,
+    "key": "Inspiration",
+    "name": "Inspiración",
+    "slots": [
+      {"runes": [
+        {"id": 8351, "name": "Aumento glacial"}
+      ]},
+      {"runes": [
+        {"id": 8313, "name": "Calzado mágico"}
+      ]},
+      {"runes": [
+        {"id": 8345, "name": "Entrega de galletas"}
+      ]},
+      {"runes": [
+        {"id": 8347, "name": "Perspicacia cósmica"}
+      ]}
+    ]
+  },
+  {
+    "id": 8400,
+    "key": "Resolve",
+    "name": "Valor",
+    "slots": [
+      {"runes": [
+        {"id": 8437, "name": "Agarre de lo inmortal"}
+      ]},
+      {"runes": [
+        {"id": 8446, "name": "Revestimiento de hueso"},
+        {"id": 8473, "name": "Segundo aliento"}
+      ]},
+      {"runes": [
+        {"id": 8453, "name": "Inquebrantable"}
+      ]}
+    ]
+  }
+]
