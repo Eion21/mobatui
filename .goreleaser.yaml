@@ -1,0 +1,82 @@
+# GoReleaser: binarios para linux/darwin/windows + .deb/.rpm + tap de
+# Homebrew y bucket de Scoop. Publica por tag (vX.Y.Z) desde GitHub
+# Actions; el changelog sale de los Conventional Commits del rango.
+version: 2
+
+project_name: builds
+
+builds:
+  - id: builds
+    main: .
+    binary: builds
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+  - id: render
+    main: ./cmd/render
+    binary: builds-render
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+nfpms:
+  - file_name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Arch }}
+    maintainer: Eion21 <eiones21@gmail.com>
+    description: Builds de MOBAs (LoL y Deadlock) en tu terminal
+    homepage: https://github.com/Eion21/builds-tui
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    contents:
+      - src: README.md
+        dst: /usr/share/doc/builds/README.md
+
+brews:
+  - repository:
+      owner: Eion21
+      name: homebrew-tap
+    homepage: https://github.com/Eion21/builds-tui
+    description: Builds de MOBAs (LoL y Deadlock) en tu terminal
+    license: MIT
+
+scoops:
+  - repository:
+      owner: Eion21
+      name: scoop-bucket
+    homepage: https://github.com/Eion21/builds-tui
+    description: Builds de MOBAs (LoL y Deadlock) en tu terminal
+    license: MIT
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
