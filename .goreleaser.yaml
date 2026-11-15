@@ -37,8 +37,19 @@ builds:
         goarch: arm64
 
 archives:
-  - name_template: >-
+  # Un archivo por binario: mobatui se publica en 5 plataformas y
+  # mobatui-render solo en las de amd64. GoReleaser rechaza un archivo
+  # que mezcle binarios con distinto número de plataformas.
+  - id: mobatui
+    builds:
+      - mobatui
+    name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+  - id: render
+    builds:
+      - render
+    name_template: >-
+      {{ .ProjectName }}-render_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 
 nfpms:
   - file_name_template: >-
