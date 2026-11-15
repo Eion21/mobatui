@@ -7,7 +7,7 @@ package clean
 import (
 	"sort"
 
-	"github.com/Eion21/builds-tui/internal/model"
+	"github.com/Eion21/mobatui/internal/model"
 )
 
 // Options parametrizan el pipeline. Los ceros activan los valores por

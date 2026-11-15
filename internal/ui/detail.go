@@ -12,9 +12,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/Eion21/builds-tui/internal/clean"
-	"github.com/Eion21/builds-tui/internal/config"
-	"github.com/Eion21/builds-tui/internal/model"
+	"github.com/Eion21/mobatui/internal/clean"
+	"github.com/Eion21/mobatui/internal/config"
+	"github.com/Eion21/mobatui/internal/model"
 )
 
 // detailView es la pantalla de un campeón/héroe: cabecera horizontal

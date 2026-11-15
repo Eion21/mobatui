@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Eion21/builds-tui/internal/model"
+	"github.com/Eion21/mobatui/internal/model"
 )
 
 const abrams = `{

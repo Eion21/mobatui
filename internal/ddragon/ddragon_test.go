@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Eion21/builds-tui/internal/cache"
+	"github.com/Eion21/mobatui/internal/cache"
 )
 
 // newClient construye un cliente con caché en tempdir y respaldo en los

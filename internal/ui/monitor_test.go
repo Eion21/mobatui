@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Eion21/builds-tui/internal/procmon"
+	"github.com/Eion21/mobatui/internal/procmon"
 )
 
 // TestEventoPersonajeEnPie: el evento CHARACTER_CHANGED del monitor se

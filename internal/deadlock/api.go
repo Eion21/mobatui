@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Eion21/builds-tui/internal/cache"
-	"github.com/Eion21/builds-tui/internal/model"
-	"github.com/Eion21/builds-tui/internal/staticdata"
+	"github.com/Eion21/mobatui/internal/cache"
+	"github.com/Eion21/mobatui/internal/model"
+	"github.com/Eion21/mobatui/internal/staticdata"
 )
 
 const (

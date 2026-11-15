@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Eion21/builds-tui/internal/config"
-	"github.com/Eion21/builds-tui/internal/model"
-	"github.com/Eion21/builds-tui/internal/staticdata"
+	"github.com/Eion21/mobatui/internal/config"
+	"github.com/Eion21/mobatui/internal/model"
+	"github.com/Eion21/mobatui/internal/staticdata"
 )
 
 func TestOrdenDeLista(t *testing.T) {

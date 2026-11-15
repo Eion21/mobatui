@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Eion21/builds-tui/internal/model"
+	"github.com/Eion21/mobatui/internal/model"
 )
 
 // TestDiagnosticoVistaLista vuelca la vista completa de la lista y el

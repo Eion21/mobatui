@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Eion21/builds-tui/internal/model"
+	"github.com/Eion21/mobatui/internal/model"
 )
 
 // fixtureFile es la forma en crudo de un resumen de campeón/posición de

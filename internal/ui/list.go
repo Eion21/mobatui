@@ -10,8 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Eion21/builds-tui/internal/clean"
-	"github.com/Eion21/builds-tui/internal/model"
+	"github.com/Eion21/mobatui/internal/clean"
+	"github.com/Eion21/mobatui/internal/model"
 )
 
 // champItem adapta un ChampEntry a la lista de bubbles: un campeón por

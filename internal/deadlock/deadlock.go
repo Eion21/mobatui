@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Eion21/builds-tui/internal/model"
-	"github.com/Eion21/builds-tui/internal/staticdata"
+	"github.com/Eion21/mobatui/internal/model"
+	"github.com/Eion21/mobatui/internal/staticdata"
 )
 
 // buildFile es la forma en cruda de un resumen de héroe.

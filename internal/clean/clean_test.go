@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Eion21/builds-tui/internal/model"
-	"github.com/Eion21/builds-tui/internal/ugg"
+	"github.com/Eion21/mobatui/internal/model"
+	"github.com/Eion21/mobatui/internal/ugg"
 )
 
 func TestWilsonLower(t *testing.T) {

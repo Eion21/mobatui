@@ -1,4 +1,4 @@
-module github.com/Eion21/builds-tui
+module github.com/Eion21/mobatui
 
 go 1.27.3
 

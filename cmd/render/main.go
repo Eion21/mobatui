@@ -14,14 +14,14 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/Eion21/builds-tui/internal/cache"
-	"github.com/Eion21/builds-tui/internal/ddragon"
-	"github.com/Eion21/builds-tui/internal/deadlock"
-	"github.com/Eion21/builds-tui/internal/lolalytics"
-	"github.com/Eion21/builds-tui/internal/model"
-	"github.com/Eion21/builds-tui/internal/staticdata"
-	"github.com/Eion21/builds-tui/internal/ugg"
-	"github.com/Eion21/builds-tui/internal/ui"
+	"github.com/Eion21/mobatui/internal/cache"
+	"github.com/Eion21/mobatui/internal/ddragon"
+	"github.com/Eion21/mobatui/internal/deadlock"
+	"github.com/Eion21/mobatui/internal/lolalytics"
+	"github.com/Eion21/mobatui/internal/model"
+	"github.com/Eion21/mobatui/internal/staticdata"
+	"github.com/Eion21/mobatui/internal/ugg"
+	"github.com/Eion21/mobatui/internal/ui"
 )
 
 func main() {

@@ -4,7 +4,7 @@
 // adaptador + proveedor estático.
 package game
 
-import "github.com/Eion21/builds-tui/internal/model"
+import "github.com/Eion21/mobatui/internal/model"
 
 // Spec es la configuración de un juego para la UI y el agrupado.
 type Spec struct {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
-	"github.com/Eion21/builds-tui/internal/model"
+	"github.com/Eion21/mobatui/internal/model"
 )
 
 // TestEstadoDeDatosEnLaBarra: los datos caducados o de fixtures deben

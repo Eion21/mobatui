@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Eion21/builds-tui/internal/clean"
+	"github.com/Eion21/mobatui/internal/clean"
 )
 
 // maxCachePages acota el barrido: cada página son ~30 ms de decodificado.

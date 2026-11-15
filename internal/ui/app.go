@@ -17,16 +17,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 
-	"github.com/Eion21/builds-tui/internal/clean"
-	"github.com/Eion21/builds-tui/internal/config"
-	"github.com/Eion21/builds-tui/internal/ddragon"
-	"github.com/Eion21/builds-tui/internal/deadlock"
-	"github.com/Eion21/builds-tui/internal/game"
-	"github.com/Eion21/builds-tui/internal/imgrender"
-	"github.com/Eion21/builds-tui/internal/model"
-	"github.com/Eion21/builds-tui/internal/procmon"
-	"github.com/Eion21/builds-tui/internal/staticdata"
-	"github.com/Eion21/builds-tui/internal/ugg"
+	"github.com/Eion21/mobatui/internal/clean"
+	"github.com/Eion21/mobatui/internal/config"
+	"github.com/Eion21/mobatui/internal/ddragon"
+	"github.com/Eion21/mobatui/internal/deadlock"
+	"github.com/Eion21/mobatui/internal/game"
+	"github.com/Eion21/mobatui/internal/imgrender"
+	"github.com/Eion21/mobatui/internal/model"
+	"github.com/Eion21/mobatui/internal/procmon"
+	"github.com/Eion21/mobatui/internal/staticdata"
+	"github.com/Eion21/mobatui/internal/ugg"
 )
 
 // panelBg es el fondo de los paneles (theme.go colPanel); las imágenes
