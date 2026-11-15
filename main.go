@@ -26,11 +26,37 @@ import (
 	"github.com/Eion21/mobatui/internal/ui"
 )
 
+// defaultDataDir resuelve la caché runtime fuera del directorio de
+// trabajo. Un binario instalado con `go install` no corre en el repo, así
+// que "data" relativo escribiría en cualquier sitio: se usa el directorio
+// de caché del usuario. Si no se puede resolver, cae a "data".
+func defaultDataDir() string {
+	if dir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(dir, "mobatui")
+	}
+	return "data"
+}
+
+// defaultFixtureDir resuelve los fixtures empaquetados junto al binario.
+// Los fixtures son datos de prueba reproducibles: si no están (instalación
+// global), la app funciona igual con la caché y la red.
+func defaultFixtureDir(sub string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return filepath.Join("testdata", sub)
+	}
+	candidate := filepath.Join(filepath.Dir(exe), "testdata", sub)
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	return filepath.Join("testdata", sub)
+}
+
 func main() {
 	var (
-		dataDir     = flag.String("data", "data", "directorio de caché runtime")
-		uggDir      = flag.String("ugg", "testdata/ugg", "directorio de datos/dumps de u.gg")
-		deadlockDir = flag.String("deadlock", "testdata/deadlock/builds", "directorio de builds de Deadlock")
+		dataDir     = flag.String("data", defaultDataDir(), "directorio de caché runtime")
+		uggDir      = flag.String("ugg", defaultFixtureDir("ugg"), "directorio de datos/dumps de u.gg")
+		deadlockDir = flag.String("deadlock", defaultFixtureDir(filepath.Join("deadlock", "builds")), "directorio de builds de Deadlock")
 		locale      = flag.String("locale", "es_ES", "idioma de Data Dragon")
 		offline     = flag.Bool("offline", false, "no acceder a la red: solo caché y fixtures")
 		refresh     = flag.Bool("refresh", false, "invalidar la caché estática antes de arrancar")
@@ -136,11 +162,13 @@ func (r deadlockRuns) LoadRuns(champKey string) ([]ui.RouteStep, error) {
 	if len(runs) < 100 {
 		return []ui.RouteStep{}, nil
 	}
-	steps := deadlock.BuildRoute(runs, 0.3)
+	const minShare = 0.3
+	steps := deadlock.BuildRoute(runs, minShare)
 	out := make([]ui.RouteStep, 0, len(steps))
 	for _, st := range steps {
 		out = append(out, ui.RouteStep{
 			Item: st.Item, N: st.N, Share: st.Share,
+			SampleSize: len(runs), MinShare: minShare,
 			MedT: st.MedT, MedNet: st.MedNet,
 			PosLo: st.PosLo, PosHi: st.PosHi,
 			UpgradeOf:    st.UpgradeOf,
@@ -148,5 +176,64 @@ func (r deadlockRuns) LoadRuns(champKey string) ([]ui.RouteStep, error) {
 			UpgradedRate: st.UpgradedRate,
 		})
 	}
+	return out, nil
+}
+
+// LoadHybrid implementa ui.BuildLoader: calcula la build híbrida del
+// héroe con el motor de dominio y la entrega ya resuelta a la UI.
+// Devuelve (nil, nil) cuando la muestra no alcanza: la UI cae a la ruta
+// observada sin mostrar un error.
+func (r deadlockRuns) LoadHybrid(champKey string) (*ui.HybridBuildView, error) {
+	id := r.api.HeroID(champKey)
+	if id == 0 {
+		return nil, fmt.Errorf("héroe desconocido: %s", champKey)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	runs, err := r.api.FetchRuns(ctx, id, 0, 250)
+	if err != nil {
+		return nil, err
+	}
+	if len(runs) < 100 {
+		return nil, nil // muestra corta: sin build híbrida
+	}
+	cat, err := r.api.ProgressionCatalog()
+	if err != nil {
+		return nil, err
+	}
+	hb, err := deadlock.BuildHybrid(runs, cat, deadlock.BuildOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := &ui.HybridBuildView{
+		Confidence: hb.Confidence,
+		FinalItems: hb.Plan.FinalItems(),
+		Spent:      hb.Plan.Spent,
+	}
+	conv := func(entries []deadlock.BuildEntry) []ui.HybridStep {
+		steps := make([]ui.HybridStep, 0, len(entries))
+		for _, e := range entries {
+			origins := make([]string, 0, len(e.Origin))
+			for _, o := range e.Origin {
+				origins = append(origins, string(o))
+			}
+			steps = append(steps, ui.HybridStep{
+				Item:       e.Item,
+				Name:       e.Name,
+				Phase:      int(e.Phase),
+				Minute:     e.Minute,
+				Confidence: e.Confidence,
+				Share:      e.Share,
+				ConsumedBy: e.ConsumedBy,
+				Chain:      e.Chain,
+				Origin:     origins,
+				Reason:     e.Reason,
+			})
+		}
+		return steps
+	}
+	out.Standard = conv(hb.Standard)
+	out.Extensions = conv(hb.Extensions)
+	out.Situationals = conv(hb.Situationals)
 	return out, nil
 }

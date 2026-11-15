@@ -31,7 +31,7 @@ func path() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "builds", "config.json"), nil
+	return filepath.Join(dir, "mobatui", "config.json"), nil
 }
 
 // Load lee la configuración; si no existe o está corrupta devuelve

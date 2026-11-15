@@ -3,6 +3,7 @@ data/
 
 # Binarios
 /builds
+/mobatui
 *.exe
 
 # Entorno Go
@@ -15,6 +16,9 @@ graphify-out/
 # ZCode
 .zcode/
 .zwork/
+
+# Notas de trabajo del agente (no forman parte del proyecto publicado)
+.perch/
 
 # Artefactos de agente (especificaciones y logbooks de trabajo)
 odd/

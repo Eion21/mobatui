@@ -29,7 +29,7 @@ import (
 
 const (
 	baseURL    = "https://lolalytics.com"
-	userAgent  = "Mozilla/5.0 (X11; Linux x86_64) builds-tui/1.0"
+	userAgent  = "Mozilla/5.0 (X11; Linux x86_64) mobatui/1.0"
 	ttlPages   = 6 * time.Hour
 	fetchDelay = 150 * time.Millisecond // cortesía con la fuente
 	// Umbral de muestra mínima por campeón/carril en el tierlist.

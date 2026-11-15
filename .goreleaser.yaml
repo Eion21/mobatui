@@ -3,12 +3,12 @@
 # Actions; el changelog sale de los Conventional Commits del rango.
 version: 2
 
-project_name: builds
+project_name: mobatui
 
 builds:
-  - id: builds
+  - id: mobatui
     main: .
-    binary: builds
+    binary: mobatui
     env:
       - CGO_ENABLED=0
     goos:
@@ -23,7 +23,7 @@ builds:
         goarch: arm64
   - id: render
     main: ./cmd/render
-    binary: builds-render
+    binary: mobatui-render
     env:
       - CGO_ENABLED=0
     goos:
@@ -45,20 +45,20 @@ nfpms:
       {{ .ProjectName }}_{{ .Version }}_{{ .Arch }}
     maintainer: Eion21 <eiones21@gmail.com>
     description: Builds de MOBAs (LoL y Deadlock) en tu terminal
-    homepage: https://github.com/Eion21/builds-tui
+    homepage: https://github.com/Eion21/mobatui
     license: MIT
     formats:
       - deb
       - rpm
     contents:
       - src: README.md
-        dst: /usr/share/doc/builds/README.md
+        dst: /usr/share/doc/mobatui/README.md
 
 brews:
   - repository:
       owner: Eion21
       name: homebrew-tap
-    homepage: https://github.com/Eion21/builds-tui
+    homepage: https://github.com/Eion21/mobatui
     description: Builds de MOBAs (LoL y Deadlock) en tu terminal
     license: MIT
 
@@ -66,7 +66,7 @@ scoops:
   - repository:
       owner: Eion21
       name: scoop-bucket
-    homepage: https://github.com/Eion21/builds-tui
+    homepage: https://github.com/Eion21/mobatui
     description: Builds de MOBAs (LoL y Deadlock) en tu terminal
     license: MIT
 
