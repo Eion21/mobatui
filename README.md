@@ -1,6 +1,6 @@
 # MOBA TUI
 
-```
+```text
  __  __  ___  ____    _    _____ _   _ ___
 |  \/  |/ _ \| __ )  / \  |_   _| | | |_ _|
 | |\/| | | | |  _ \ / _ \   | | | | | || |
@@ -8,111 +8,63 @@
 |_|  |_|\___/|____/_/   \_\ |_|  \___/|___|
 ```
 
-**Builds, runas y stats de Deadlock & League of Legends — directo en tu terminal.**
+**Builds, runas y estadísticas de League of Legends y Deadlock — directo en tu terminal.**
 
-[![CI](https://github.com/Eion21/mobatui/actions/workflows/ci.yml/badge.svg)](https://github.com/Eion21/mobatui/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Eion21/mobatui?display_name=tag)](https://github.com/Eion21/mobatui/releases)
-[![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[English README](README.en.md)
 
-A fast terminal UI (TUI) for **Deadlock** and **League of Legends** that turns real match data into item builds, skill orders and stats — readable at a glance during a game.
+Una interfaz de terminal (TUI) rápida para **League of Legends** y **Deadlock** que convierte datos reales de partidas en builds, órdenes de habilidades y estadísticas fáciles de leer de un vistazo mientras juegas.
 
-Built in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss).
+Desarrollada en Go con [Bubble Tea](https://github.com/charmbracelet/bubbletea) y [Lip Gloss](https://github.com/charmbracelet/lipgloss).
 
 ---
 
-## At a glance (ASCII)
+## Capturas de pantalla
 
-```
-┌─ MOBA TUI ──────────────────────────────────────────────────────────────┐
-│  [1] Deadlock   [2] League of Legends        source: cache · offline ok  │
-├──────────────────────────────┬──────────────────────────────────────────┤
-│  > Haze                      │  BUILD  (EARLY → MID → LATE)             │
-│    Bebop                     │  ▸ Restorative Shot   (high)  +12.4%     │
-│    Seven                     │  ▸ Slowing Bullets    (high)  + 8.1%     │
-│    Infernus                  │  ▸ Mystic Shot        (mod)   + 5.0%     │
-│  ...                         │  ▸ ...                                   │
-│                              │                                          │
-│  [tab] tabs  [m] monitor     │  SKILLS  1-2-1-3-1-4  (hero keys)        │
-│  [enter] open  [?] help      │  SITUATIONAL  anti-heal · spirit def     │
-└──────────────────────────────┴──────────────────────────────────────────┘
-```
+### Vista de build e ítems (Deadlock)
+> Tarjetas en truecolor por fase (`EARLY`, `MID`, `LATE`), evolución de componentes (`↑`), minuto estimado, costo en almas, orden de habilidades (`max 3 > 1 > 2 > 4`) y tendencia de win rate por parche.
 
-- **Data real, sin humo:** builds desde secuencias de compra reales y evaluación estadística conservadora.
-- **Confianza visible:** etiquetas *high / moderate / low* (muestra + incertidumbre), nunca “probabilidad de ganar”.
-- **Funciona offline:** caché local con TTL y fallback a fixtures.
-- **Listo para el juego:** monitor (`m`) detecta el juego y, en LoL, tu campeón en partida.
+![Vista de build e ítems en Deadlock](docs/screenshots/deadlock-build.jpg)
+
+### Selector de juego y lista de héroes
+
+| Menú principal y monitor activo | Lista filtrable ordenada por Wilson Score |
+| --- | --- |
+| ![Menú principal y monitor activo](docs/screenshots/game-select.png) | ![Lista filtrable ordenada por Wilson Score](docs/screenshots/hero-list.jpg) |
 
 ---
 
-## Español (resumen)
+## Características principales
 
-**MOBA TUI** es una interfaz de terminal para **Deadlock** y **League of Legends** que convierte datos reales de partidas en builds, órdenes de habilidades y estadísticas fáciles de leer mientras juegas.
+- **Datos reales, sin humo:** Builds generadas a partir de secuencias de compra reales y evaluación estadística conservadora.
+- **Confianza visible:** Etiquetas *alta / moderada / baja* según tamaño de muestra e incertidumbre, nunca presentadas como «probabilidad de ganar».
+- **Arte en terminal (Truecolor):** Iconos de ítems y retratos de héroes/campeones renderizados directamente en consola.
+- **Funciona offline:** Caché local en disco con TTL, degradación controlada (stale-if-error) y fallback a fixtures incluidos.
+- **Monitor de partida (`m`):** Detecta automáticamente si el juego está abierto y, en League of Legends, identifica tu campeón en tiempo real mediante la *Live Client Data API*.
 
-- **Deadlock** (vía [deadlock-api.com](https://deadlock-api.com)): builds híbridos (estadística + motor de progresión que respeta cadenas de mejora, consumo de componentes y límites de inventario), secciones EARLY/MID/LATE, extensiones y situaciones, confianza (alta/moderada/baja) por tamaño muestral e incertidumbre, y órdenes de habilidades según teclas reales del héroe.
-- **League of Legends** (vía [lolalytics.com](https://lolalytics.com)): builds, runas, orden de habilidades y hechizos; ranking por cota inferior de Wilson para evitar muestras pequeñas engañosas; arte ASCII de campeones.
-- **En ambos**: caché local en disco con TTL, modo offline con caché/fixtures, monitor de juego (`m`) y recarga controlada.
+### Deadlock (vía [deadlock-api.com](https://deadlock-api.com))
+- **Generador híbrido de builds:** Combina estadística por ítem con un motor de progresión que respeta cadenas de mejora, consumo de componentes y límites de inventario.
+- **Fases y contexto:** Rutas divididas en **EARLY / MID / LATE**, extensiones para partidas largas e ítems **situacionales** agrupados por función (anti-heal, defensa física/espiritual, resistencia a CC, supervivencia y daño extra).
+- **Habilidades reales:** Orden de subida mapeado a las teclas reales del héroe (`signature1..4`), consolidando formas transformadas en sus 4 ranuras reales.
+- **Meta y enfrentamientos:** Tendencia de win rate entre parches, matchups y sinergias.
 
-**Requisitos rápidos:** Go 1.27+, terminal con truecolor.
+### League of Legends (vía [lolalytics.com](https://lolalytics.com))
+- **Todo en un lugar:** Builds de objetos, páginas de runas, orden de habilidades y hechizos de invocador.
+- **Ranking por cota inferior de Wilson:** Evita que muestras pequeñas con win rates inflados superen a builds probadas en decenas de miles de partidas.
+
+---
+
+## Requisitos e instalación
+
+- **Go 1.27** o superior para compilar desde el código fuente.
+- Una **terminal con soporte Truecolor** (Kitty, Alacritty, WezTerm, Ghostty, Windows Terminal, iTerm2, etc.) para visualizar correctamente los iconos y retratos.
+- **Plataformas:** Linux es la plataforma principal; macOS y Windows están soportados en código y CI.
 
 ```bash
 go install github.com/Eion21/mobatui@latest
 mobatui
 ```
 
----
-
-## What it does
-
-### Flow (ASCII)
-
-```
-┌──────────────┐      ┌──────────────┐      ┌──────────────────┐
-│  Upstream    │      │  Local cache │      │  Bubble Tea TUI  │
-│  APIs / HTML │ ───▶ │  TTL + stale │ ───▶ │  views + cards   │
-│  (net/fix)   │      │  ~/.cache/*  │      │  (terminal UI)   │
-└──────────────┘      └──────────────┘      └──────────────────┘
-        │                     ▲                        │
-        └──── fallback ───────┘                        ▼
-                                   You pick game/champ → builds, skills, stats
-```
-
-**Deadlock** (via [deadlock-api.com](https://deadlock-api.com))
-
-- Item builds assembled from real purchase sequences, not just popularity: a hybrid generator combines per-item statistics with a progression engine that respects upgrade chains, component consumption and inventory limits.
-- Builds split into **EARLY / MID / LATE**, plus **extensions** for long games and **situational** items grouped by function (anti-heal, bullet defence, spirit defence, crowd-control resistance, survivability, extra damage).
-- Every item carries a confidence label (high / moderate / low) derived from sample size, statistical uncertainty and consistency — never presented as a win probability.
-- Skill orders mapped to the hero's **real keys** using the game's own metadata (`signature1..4`), including heroes whose abilities change form when transformed (e.g. Silver: 7 statistical records collapse into 4 real slots).
-- Hero win-rate trend, matchups and synergies.
-
-**League of Legends** (via [lolalytics.com](https://lolalytics.com))
-
-- Item builds, rune pages, skill order and summoner spells.
-- Items ranked by the **lower bound of the Wilson score**, not raw win rate, so three-game samples do not outrank 40,000-game ones.
-- Champion art rendered as ASCII in the terminal.
-
-**Both games**
-
-- Everything goes through a local on-disk cache with TTL, degrading to bundled fixtures when offline.
-- Game monitor (`m`): detects the running game, and in LoL the champion in the current match via the local Live Client Data API.
-
----
-
-## Requirements
-
-- Go 1.27 or newer to build from source.
-- A terminal with truecolor support for item and hero art.
-- Linux is the primary platform. macOS and Windows are supported by the code and CI, but have had less manual testing.
-
----
-
-## Install
-
-```bash
-go install github.com/Eion21/mobatui@latest
-```
-
-Or build from a clone:
+O compilando desde el repositorio:
 
 ```bash
 git clone https://github.com/Eion21/mobatui
@@ -121,126 +73,119 @@ go build -o mobatui .
 ./mobatui
 ```
 
-Runtime cache lives in your user cache directory (`~/.cache/mobatui` on Linux) and preferences in your user config directory (`~/.config/mobatui/config.json`). Nothing is written inside the repository.
+La caché se guarda en el directorio de caché del usuario (por defecto `~/.cache/mobatui` en Linux) y la configuración en `~/.config/mobatui/config.json`. No se escriben archivos dentro del repositorio.
 
-### Flags
+### Flags disponibles
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `-data` | user cache dir | Runtime cache directory |
-| `-offline` | `false` | No network: cache and fixtures only |
-| `-refresh` | `false` | Invalidate static cache before starting |
-| `-locale` | `es_ES` | Data Dragon language for LoL |
-| `-ugg` | `testdata/ugg` | u.gg dump directory |
-| `-deadlock` | `testdata/deadlock/builds` | Deadlock fixture directory |
-
----
-
-## Controls
-
-| Key | Action |
-|---|---|
-| `1` / `2`, `←` `→` | Pick game |
-| `enter` | Open champion / reuse loaded session |
-| `r` | Force reload (or cycle role in detail) |
-| `R` | Cycle role backwards |
-| `tab`, `1`-`5` | Switch tabs |
-| `←↑↓→`, `hjkl` | Move selection |
-| `enter` | Item detail popup |
-| `esc` | Close popup / cancel filter / go back |
-| `u` | Fold or show upgrade cards |
-| `a` | Cycle portrait mode |
-| `m` | Toggle game monitor |
-| `?` | Help |
-| typing | Filters the list |
-| mouse wheel | Scroll |
+| Flag | Por defecto | Descripción |
+| --- | --- | --- |
+| `-data` | `~/.cache/mobatui` | Directorio para la caché en tiempo de ejecución |
+| `-offline` | `false` | Modo sin red: usa únicamente caché local y fixtures |
+| `-refresh` | `false` | Invalida la caché estática antes de iniciar |
+| `-locale` | `es_ES` | Idioma de Data Dragon para League of Legends |
+| `-ugg` | `testdata/ugg` | Directorio de datos/dumps de u.gg |
+| `-deadlock` | `testdata/deadlock/builds` | Directorio de fixtures/builds de Deadlock |
 
 ---
 
-## How the builds work
+## Controles
 
-The generator is deliberately conservative about what it claims.
-
-1. **Observed route** — purchase sequences from real matches, ranked by consensus precedence. This is what most players actually buy.
-2. **Statistical evaluation** — each candidate is scored on popularity, phase-adjusted frequency, adjusted performance, sample size, statistical uncertainty and consistency across the sample. A Beta-Binomial posterior is used alongside the Wilson lower bound; neither is treated as causal.
-3. **Progression engine** — validates that a proposed sequence is actually purchasable: upgrade chains must exist in the catalogue, components are consumed, inventory capacity is respected, no cycles.
-4. **Hybrid build** — combines the above into a sequence that is both statistically supported and mechanically valid, with a reason recorded for every item included or excluded.
-
-A high win rate is **not** treated as evidence that an item causes wins. Items bought while already ahead show inflated win rates; the scoring accounts for this rather than rewarding it.
-
-### Confidence
-
-Confidence is a label, not a probability:
-
-- **high** — large sample, narrow uncertainty, consistent across the sample.
-- **moderate** — usable, but the sample does not support strong claims.
-- **low** — shown for completeness; treat as a hint.
-
----
-
-## Cache and freshness
-
-All network responses are cached on disk with a TTL and served stale on failure rather than breaking the app. The status bar shows whether data came from network, cache, stale cache or bundled fixtures.
-
-Reopening a hero you already visited reuses the computed result for that session; it does not re-fetch or recompute.
-
-No request rate is increased above what the upstream APIs allow. The app is designed to be run by one person, not as a service.
+| Tecla | Acción |
+| --- | --- |
+| `1` / `2`, `←` `→` | Seleccionar juego (`1` League of Legends, `2` Deadlock) |
+| `g` | Cambiar de juego rápidamente |
+| `enter` | Abrir héroe/campeón o abrir detalle del ítem seleccionado |
+| `escribir` | Filtrar la lista de héroes/campeones en tiempo real |
+| `tab` | Cambiar criterio de orden en la lista / cambiar pestaña en detalle |
+| `1`-`4` / `1`-`5` | Saltar directamente a una pestaña (`Ítems`, `Resumen`, `Matchups`, `Habilidades`) |
+| `←↑↓→`, `hjkl` | Mover selección entre tarjetas o filas |
+| `r` / `R` | Forzar recarga (o rotar rol adelante/atrás en vista de detalle) |
+| `u` | Plegar o desplegar tarjetas de mejora |
+| `a` | Cambiar modo de retrato |
+| `m` | Activar o desactivar el monitor de juego |
+| `?` | Mostrar/ocultar ayuda de atajos |
+| `esc` | Cerrar popup, limpiar filtro o volver atrás |
+| `rueda del ratón` | Desplazar vista |
 
 ---
 
-## Known limitations
+## ¿Cómo se calculan las builds?
 
-- **Builds are statistical consensus, not optimal play.** They describe what wins in the data, not what will win your next game.
-- **No causal claims.** A higher win rate on an item does not mean buying it improves your results.
-- **Sample sizes vary.** Some heroes have thousands of matches, others a few hundred. Confidence labels reflect this; low-confidence items should be read as suggestions.
-- **Hero coverage.** 65 heroes are in the catalogue; 44 have enough cached match data to build a route. The rest show general statistics without a purchase order. Two heroes in development have no published ability kit.
-- **Situational item labels** come from verifiable item properties (name and category), not from matchup analysis. The app does not claim an item counters a specific hero.
-- **No real-terminal visual validation** has been recorded for the latest layout changes; verification is automated tests plus text renders at fixed sizes.
-- **League of Legends data** is decoded from Lolalytics' server-rendered HTML. If their markup changes, parsing breaks until updated.
+El generador es deliberadamente conservador respecto a lo que afirma:
+
+```text
+┌──────────────┐      ┌──────────────┐      ┌──────────────────┐
+│  APIs / HTML │ ───▶ │ Caché local  │ ───▶ │  Bubble Tea TUI  │
+│  (red/fix)   │      │ TTL + stale  │      │ vistas + tarjetas│
+└──────────────┘      └──────────────┘      └──────────────────┘
+        │                     ▲                        │
+        └──── fallback ───────┘                        ▼
+                                   Selección → builds, skills, stats
+```
+
+1. **Ruta observada:** Secuencias de compra extraídas de partidas reales, ordenadas por precedencia de consenso.
+2. **Evaluación estadística:** Cada ítem candidato se evalúa según popularidad, frecuencia ajustada por fase, rendimiento ajustado, tamaño muestral, incertidumbre estadística y consistencia (mediante distribución posterior Beta-Binomial y cota inferior de Wilson).
+3. **Motor de progresión:** Valida que la secuencia sea mecánicamente comprable en partida (existencia de cadenas de mejora en el catálogo, consumo real de componentes, límite de ranuras de inventario y ausencia de ciclos).
+4. **Build híbrida:** Combina el respaldo estadístico con la validez mecánica, registrando el motivo de inclusión o exclusión de cada objeto.
+
+> **Nota sobre el Win Rate:** Un porcentaje de victoria alto **no** se interpreta como causalidad. Los ítems caros comprados cuando un equipo ya va ganando tienen win rates inflados; el sistema corrige este sesgo en lugar de premiarlo.
+
+### Niveles de confianza
+
+- **Alta:** Muestra grande, intervalo de incertidumbre estrecho y consistencia en los datos.
+- **Moderada:** Datos utilizables, pero sin volumen suficiente para afirmaciones categóricas.
+- **Baja:** Se muestra por completitud; debe tomarse solo como referencia.
 
 ---
 
-## Data sources and credits
+## Limitaciones conocidas
 
-- **Deadlock** data: [deadlock-api.com](https://deadlock-api.com) — community-run API. Hero, item and match data belong to Valve.
-- **League of Legends** data: [lolalytics.com](https://lolalytics.com) for statistics, [Data Dragon](https://developer.riotgames.com/docs/lol#data-dragon) for names and images.
-- **Live Client Data API** (local, `127.0.0.1:2999`) for the in-game champion, when League is running.
-
-Deadlock is a trademark of Valve Corporation. League of Legends and Riot Games are trademarks of Riot Games, Inc. This project is not affiliated with, endorsed by, or sponsored by either company. Game assets are used for identification purposes only.
+- **Consenso estadístico, no juego óptimo:** Las builds reflejan qué funciona en el agregado de partidas, no una garantía de victoria en una partida concreta.
+- **Cobertura de héroes en Deadlock:** El catálogo incluye 65 héroes; 44 cuentan con suficientes partidas en caché para generar rutas completas (el resto muestra estadísticas generales sin orden de compra, y 2 héroes en desarrollo aún no tienen kit publicado).
+- **Etiquetas situacionales:** Se derivan de propiedades verificables del objeto (nombre y categoría), no de un análisis causal contra héroes específicos.
+- **Dependencia de marcado en LoL:** Los datos de League of Legends se extraen del HTML renderizado de Lolalytics; cambios en su estructura web pueden requerir actualizar el parser.
 
 ---
 
-## Development
+## Desarrollo
 
 ```bash
-go test ./...      # full suite, no network required
-go vet ./...
-gofmt -l .         # must be empty
-go run ./cmd/render deadlock   # text render, no TUI needed
+go test ./...                    # Suite completa (sin conexión a internet)
+go vet ./...                     # Análisis estático
+gofmt -l .                       # Verificación de formato (debe salir vacío)
+go run ./cmd/render deadlock     # Renderizado en texto plano para depurar layouts
 ```
 
-Tests use bundled fixtures and a local HTTP server; they do not hit the public game APIs. `cmd/render` dumps a view to stdout so layout changes can be checked without a terminal.
+### Estructura del proyecto
 
-### Layout (ASCII)
-
-```
+```text
 .
 ├── cmd/
-│   ├── mobatui/        # entrypoint (main)
-│   └── render/         # text/fixture renderer (debug/layout)
+│   ├── mobatui/        # (o raíz con main.go) Punto de entrada principal
+│   └── render/         # Renderizador de texto/fixtures para pruebas de layout
+├── docs/
+│   └── screenshots/    # Capturas usadas en el README
 ├── internal/
-│   ├── deadlock/       # API client, routes, evaluation, hybrid gen
-│   ├── progression/    # catalogue, upgrade chains, inventory sim
-│   ├── lolalytics/     # LoL stats client
-│   ├── ddragon/        # LoL static data + images
-│   ├── clean/          # Wilson scoring, build cleaning
-│   ├── ui/             # Bubble Tea views, cards, navigation
-│   └── cache/          # on-disk cache (TTL, stale-if-error)
-└── testdata/           # fixtures for tests and offline mode
+│   ├── deadlock/       # Cliente API, rutas, evaluación y generador híbrido
+│   ├── progression/    # Catálogo, cadenas de mejora y simulación de inventario
+│   ├── lolalytics/     # Cliente de estadísticas de LoL
+│   ├── ddragon/        # Datos estáticos e imágenes de Data Dragon
+│   ├── clean/          # Puntuación de Wilson y limpieza de builds
+│   ├── ui/             # Vistas Bubble Tea, tarjetas y navegación
+│   └── cache/          # Caché en disco (TTL, stale-if-error)
+└── testdata/           # Fixtures para tests y modo offline
 ```
 
 ---
 
-## License
+## Fuentes de datos y créditos
 
-MIT — see [LICENSE](LICENSE). Game data and assets remain the property of their respective owners and are not covered by this license.
+- **Deadlock:** [deadlock-api.com](https://deadlock-api.com) (API comunitaria). Los datos e imágenes pertenecen a Valve.
+- **League of Legends:** [lolalytics.com](https://lolalytics.com) para estadísticas y [Data Dragon](https://developer.riotgames.com/docs/lol#data-dragon) para nombres e iconos.
+- **Live Client Data API** (`127.0.0.1:2999`) para detectar el campeón activo en partida.
+
+*Deadlock es una marca registrada de Valve Corporation. League of Legends y Riot Games son marcas registradas de Riot Games, Inc. Este proyecto no está afiliado, respaldado ni patrocinado por ninguna de las dos compañías.*
+
+## Licencia
+
+MIT — consulta el archivo [LICENSE](LICENSE). Los datos y recursos visuales de los juegos siguen siendo propiedad de sus respectivos dueños.
