@@ -266,6 +266,72 @@ var (
 	metaNext time.Time
 )
 
+// runsMemo evita repetir la decodificación de la muestra de partidas al
+// volver a un héroe ya consultado. NO es una caché de datos: la clave
+// incluye la fecha de los datos servidos por la caché de disco, así que
+// un refresco real invalida la entrada. Se acota a un número pequeño de
+// héroes para no crecer sin límite durante una sesión larga.
+type runsMemoEntry struct {
+	fetchedAt time.Time
+	runs      []Run
+}
+
+var (
+	runsMemoMu sync.Mutex
+	runsMemo   = map[string]runsMemoEntry{}
+)
+
+// runsMemoMax es el número de héroes cuyas runs se retienen. Con 250
+// partidas por héroe son unos pocos MB como mucho.
+const runsMemoMax = 8
+
+// memoKey identifica una consulta de runs de forma inequívoca.
+func memoKey(hero, minBadge, limit int, fetchedAt time.Time) string {
+	return fmt.Sprintf("%d|%d|%d|%d", hero, minBadge, limit, fetchedAt.UnixNano())
+}
+
+// memoGet devuelve las runs memorizadas para esa clave exacta.
+func memoGet(key string) ([]Run, bool) {
+	runsMemoMu.Lock()
+	defer runsMemoMu.Unlock()
+	e, ok := runsMemo[key]
+	if !ok {
+		return nil, false
+	}
+	return e.runs, true
+}
+
+// memoPut guarda las runs bajo la clave. Si se supera el tope, se
+// descarta la entrada más antigua (mapa pequeño: barrido lineal).
+func memoPut(key string, fetchedAt time.Time, runs []Run) {
+	runsMemoMu.Lock()
+	defer runsMemoMu.Unlock()
+	if len(runsMemo) >= runsMemoMax {
+		var oldestKey string
+		var oldest time.Time
+		for k, v := range runsMemo {
+			if oldestKey == "" || v.fetchedAt.Before(oldest) {
+				oldestKey, oldest = k, v.fetchedAt
+			}
+		}
+		delete(runsMemo, oldestKey)
+	}
+	runsMemo[key] = runsMemoEntry{fetchedAt: fetchedAt, runs: runs}
+}
+
+// perfHook permite instrumentar los tiempos internos en pruebas.
+var perfHook func(stage string, d time.Duration)
+
+// SetPerfHook instala (o quita, con nil) el hook de instrumentación.
+func SetPerfHook(fn func(stage string, d time.Duration)) { perfHook = fn }
+
+// ResetRunsMemo vacía la memoización (tests y cambio de fuente).
+func ResetRunsMemo() {
+	runsMemoMu.Lock()
+	defer runsMemoMu.Unlock()
+	runsMemo = map[string]runsMemoEntry{}
+}
+
 func waitMetaSlot(ctx context.Context) error {
 	metaMu.Lock()
 	defer metaMu.Unlock()
@@ -315,12 +381,35 @@ func compsOf(shop map[int]apiItem) map[int][]int {
 	return out
 }
 
+// runsCatalog resuelve el catálogo de tienda y sus componentes una sola
+// vez por cliente. El catálogo es estático dentro de una sesión: la
+// política de actualización la sigue marcando la caché de disco de
+// assets (ttlAssets), no esta reutilización.
+func (a *APIClient) runsCatalog() (map[int]apiItem, map[int][]int, error) {
+	a.runsCatMu.Lock()
+	defer a.runsCatMu.Unlock()
+	if a.runsCat != nil {
+		return a.runsCat, a.runsComps, nil
+	}
+	shop, _, err := a.shopItems()
+	if err != nil {
+		return nil, nil, err
+	}
+	a.runsCat, a.runsComps = shop, compsOf(shop)
+	return a.runsCat, a.runsComps, nil
+}
+
 // FetchRuns descarga (con caché diaria) las secuencias de compra del
 // héroe. El array JSON se decodifica en streaming: la respuesta cruda
 // (decenas de KB por partida) nunca se retiene ni se cachea; lo que
 // queda en caché es el resultado agregado (las Run).
 func (a *APIClient) FetchRuns(ctx context.Context, hero, minBadge, limit int) ([]Run, error) {
-	shop, _, err := a.shopItems()
+	// El catálogo (782 ítems) se necesita para clasificar las compras,
+	// pero no cambia entre llamadas: se resuelve una sola vez por
+	// cliente y se reutiliza. Antes se recargaba y re-decodificaba en
+	// cada FetchRuns, y ese era el 90 % del tiempo de una consulta
+	// repetida.
+	shop, comps, err := a.runsCatalog()
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +417,6 @@ func (a *APIClient) FetchRuns(ctx context.Context, hero, minBadge, limit int) ([
 	for id := range shop {
 		shopSet[id] = true
 	}
-	comps := compsOf(shop)
 
 	q := url.Values{
 		"hero_ids":             {fmt.Sprint(hero)},
@@ -370,14 +458,34 @@ func (a *APIClient) FetchRuns(ctx context.Context, hero, minBadge, limit int) ([
 		}
 		return json.Marshal(runs)
 	}
+	tGet := time.Now()
 	res, err := a.c.Get(a.apiBase+path, metaTTL, fetch)
+	if perfHook != nil {
+		perfHook("cache.Get", time.Since(tGet))
+	}
 	if err != nil {
 		return nil, err
 	}
+	// La fecha de los datos servidos forma parte de la clave: si la
+	// caché de disco se refresca, la entrada memorizada deja de
+	// coincidir y se vuelve a decodificar.
+	var fetchedAt time.Time
+	if _, at, ok := a.c.Last(); ok {
+		fetchedAt = at
+	}
+	key := memoKey(hero, minBadge, limit, fetchedAt)
+	if runs, ok := memoGet(key); ok {
+		return runs, nil
+	}
 	var runs []Run
+	tDec := time.Now()
 	if err := json.Unmarshal(res.Body, &runs); err != nil {
 		return nil, fmt.Errorf("deadlock-api: runs inválidas: %w", err)
 	}
+	if perfHook != nil {
+		perfHook("json.Unmarshal", time.Since(tDec))
+	}
+	memoPut(key, fetchedAt, runs)
 	return runs, nil
 }
 
