@@ -26,6 +26,11 @@ type SkillRules struct {
 	Length    int
 	MaxPoints map[rune]int
 	LockedAt  map[rune][]int // niveles 1-based; vacío = libre
+	// CanonicalOrder indica que los slots 1..N siguen el orden real del
+	// juego (Deadlock: signature1..4). Si es false, los slots se
+	// asignaron por frecuencia de uso: es una aproximación estadística,
+	// NO el orden canónico, y la UI debe decirlo.
+	CanonicalOrder bool
 }
 
 // SkillRules devuelve las reglas del juego.
@@ -284,6 +289,10 @@ type CleanBuild struct {
 	// fijo (para filas de la rejilla; incluye la R de LoL, que no está
 	// en Priority).
 	SkillAlphabet []rune
+	// CanonicalSkillOrder indica que SkillAlphabet sigue el orden real
+	// del juego. Si es false, los slots vienen de la frecuencia de uso
+	// y la UI no debe presentarlos como posiciones canónicas.
+	CanonicalSkillOrder bool
 	// AbilityNames se propaga del dato crudo para leyendas de la UI.
 	AbilityNames map[rune]string
 	// Matchups y Synergies se propagan del dato crudo.

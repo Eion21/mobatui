@@ -79,6 +79,7 @@ func Build(cb *model.ChampionBuilds, opts Options) *model.CleanBuild {
 	clean.RunePages = rankRunePages(cb.RunePages, total, opts)
 	clean.SkillOrder = bestSkillOrder(cb.Skills, total, cb.SkillRulesFor(), opts)
 	clean.SkillAlphabet = cb.SkillRulesFor().Alphabet
+	clean.CanonicalSkillOrder = cb.SkillRulesFor().CanonicalOrder
 	clean.AbilityNames = cb.AbilityNames
 	clean.Matchups = cb.Matchups
 	clean.Synergies = cb.Synergies
