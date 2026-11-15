@@ -401,7 +401,7 @@ func TestRutaDeCompraDL(t *testing.T) {
 	// La vista muestra la ruta, la línea `de <base>`, el coste neto
 	// y el minuto propio; y ya no el coste encadenado viejo.
 	v := collapsePlain(d.View())
-	for _, want := range []string{"RUTA", "de Salud extra", "+800 almas", "~11 min"} {
+	for _, want := range []string{"Ruta observada", "de Salud extra", "+800 almas", "~11 min"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("vista Deadlock sin %q", want)
 		}
@@ -652,7 +652,7 @@ func TestDeadlockInterleavedRoute(t *testing.T) {
 	if strings.Contains(view, "MEJORAS") {
 		t.Error("upgrades still form a separate group")
 	}
-	for _, want := range []string{"↑ Mejora de", "~14 min", "SITUACIONALES"} {
+	for _, want := range []string{"↑ Mejora de", "~14 min", "Fuera de la ruta"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -769,8 +769,9 @@ func TestDeadlockCardVisualHierarchy(t *testing.T) {
 				}
 			}
 			sections, _ := d.itemsSectionsDL(cards)
-			if strings.Count(strings.Join(sections, "\n"), "minutos orientativos") != 1 {
-				t.Error("timing disclaimer repeated or missing")
+			joinedSections := strings.Join(sections, "\n")
+			if strings.Count(joinedSections, "Ruta observada") != 1 {
+				t.Error("compact header repeated or missing")
 			}
 			d.itemIdx = 1
 			footer := d.itemsFooter()
@@ -928,10 +929,10 @@ func TestDeadlockSituationalsOneSection(t *testing.T) {
 			t.Errorf("label still says %q", unwanted)
 		}
 	}
-	if got := strings.Count(text, "SITUACIONALES"); got != 1 {
-		t.Errorf("SITUACIONALES headings = %d, want 1", got)
+	if got := strings.Count(text, "Fuera de la ruta"); got != 1 {
+		t.Errorf("Fuera de la ruta headings = %d, want 1", got)
 	}
-	if strings.Index(text, "SITUACIONALES") < strings.Index(text, "LATE") {
+	if strings.Index(text, "Fuera de la ruta") < strings.Index(text, "LATE") {
 		t.Error("situationals shown before the end of the route")
 	}
 }

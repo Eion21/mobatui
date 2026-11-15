@@ -14,6 +14,8 @@ type RouteStep struct {
 	Order        int     // posición en la ruta de consenso (1..n)
 	N            int     // partidas de la muestra en las que aparece
 	Share        float64 // fracción de partidas que lo compran
+	SampleSize   int     // partidas usadas para calcular la ruta; 0 = desconocido
+	MinShare     float64 // umbral de aparición; 0 = desconocido
 	MedT         int     // segundo mediano de compra
 	MedNet       int     // patrimonio mediano al comprarlo (acumulado)
 	PosLo, PosHi int     // posición de compra, P25–P75
@@ -40,5 +42,74 @@ func loadRunsCmd(l RunsLoader, champKey string) tea.Cmd {
 	return func() tea.Msg {
 		steps, err := l.LoadRuns(champKey)
 		return runsLoadedMsg{ChampKey: champKey, Steps: steps, Err: err}
+	}
+}
+
+// ─── build híbrida ─────────────────────────────────────────────────
+
+// HybridStep es un paso de la build híbrida, ya resuelto por el motor
+// de dominio. La UI NO calcula estadística: solo presenta estos datos.
+type HybridStep struct {
+	Item       int
+	Name       string
+	Phase      int     // 0 EARLY, 1 MID, 2 LATE
+	Minute     int     // minuto estimado de compra
+	Confidence float64 // 0..1; NO es probabilidad de victoria
+	Share      float64 // fracción de partidas que lo compra
+	// ConsumedBy es el objeto posterior que consume a este como
+	// componente (0 = permanece en el inventario final).
+	ConsumedBy int
+	// Chain es la cadena completa de componentes, en orden de compra.
+	Chain []int
+	// Origin son las procedencias: observed, statistical, progression.
+	Origin []string
+	// Reason es la justificación de una línea.
+	Reason string
+}
+
+// HybridSection agrupa la build por función.
+type HybridSection int
+
+const (
+	SectionStandard HybridSection = iota
+	SectionExtensions
+	SectionSituationals
+)
+
+// HybridBuildView es la build híbrida lista para pintar.
+type HybridBuildView struct {
+	// Key identifica de qué datos salió esta build (muestra, catálogo,
+	// parche, filtros). Si la clave vigente cambia, la build guardada
+	// deja de usarse: nunca se sirve un resultado obsoleto.
+	Key          string
+	Standard     []HybridStep
+	Extensions   []HybridStep
+	Situationals []HybridStep
+	// Confidence es la confianza global (el eslabón más débil).
+	Confidence float64
+	// FinalItems es el número de objetos que quedan en el inventario.
+	FinalItems int
+	// Spent es el gasto total en almas (0 = desconocido).
+	Spent int
+}
+
+// BuildLoader trae la build híbrida de un héroe bajo demanda. Devuelve
+// nil sin error cuando la muestra no alcanza: la UI cae a la ruta
+// observada.
+type BuildLoader interface {
+	LoadHybrid(champKey string) (*HybridBuildView, error)
+}
+
+// hybridLoadedMsg llega cuando la build híbrida terminó de calcularse.
+type hybridLoadedMsg struct {
+	ChampKey string
+	Build    *HybridBuildView
+	Err      error
+}
+
+func loadHybridCmd(l BuildLoader, champKey string) tea.Cmd {
+	return func() tea.Msg {
+		b, err := l.LoadHybrid(champKey)
+		return hybridLoadedMsg{ChampKey: champKey, Build: b, Err: err}
 	}
 }

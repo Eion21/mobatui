@@ -125,6 +125,14 @@ type Session struct {
 	Routes map[string][]RouteStep
 	// Runs trae la ruta bajo demanda; nil = sin datos de ruta.
 	Runs RunsLoader
+	// Hybrids guarda la build híbrida por héroe (carga bajo demanda).
+	// nil = en curso; ausente = no pedida; presente = calculada.
+	Hybrids map[string]*HybridBuildView
+	// HybridLoader trae la build híbrida bajo demanda; nil = sin loader.
+	HybridLoader BuildLoader
+	// HybridKey es la clave de vigencia de las builds híbridas de esta
+	// sesión (parche + muestra + filtros). Cambiarla invalida todas.
+	HybridKey string
 	// DataKind y DataAge describen el origen de los datos ("red",
 	// "caché", "caducado", "fixtures"); vacío = desconocido.
 	DataKind string
@@ -247,6 +255,9 @@ func LoadSession(g model.Game, l Loader) (*Session, error) {
 	// Enriquecimiento tolerante a fallos.
 	if p := l.Providers[g]; p != nil {
 		s.Version, _ = p.Version()
+		// Clave de vigencia de las builds híbridas: si el parche o la
+		// fuente cambian, las builds guardadas dejan de usarse.
+		s.HybridKey = hybridKeyFor(s.Version, "")
 		if heroes, err := p.Heroes(); err == nil {
 			s.Names.Heroes = heroes
 			s.Names.HeroNameByID = make(map[int]string, len(heroes))
@@ -295,6 +306,10 @@ func LoadSession(g model.Game, l Loader) (*Session, error) {
 	// sesión y el detalle dispara la carga al abrir el héroe.
 	if rl := l.RunsLoaders[g]; rl != nil {
 		s.Runs = rl
+		// El mismo adaptador sirve la build híbrida cuando lo implementa.
+		if bl, ok := rl.(BuildLoader); ok {
+			s.HybridLoader = bl
+		}
 	}
 
 	// En Deadlock el ranking global de Wilson elige casi siempre
@@ -700,23 +715,77 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// La ruta del héroe llegó: se guarda en la sesión (vacía si
 		// hubo error, para no reintentar en loop) y el detalle activo
 		// se re-renderiza con los números de ruta.
-		if a.session == nil || m.ChampKey == "" {
+		if a.session == nil || a.session.Game != model.GameDeadlock || m.ChampKey == "" {
 			return a, nil
+		}
+		active := a.screen == screenDetail && a.detail.champ != nil && a.detail.champ.Key == m.ChampKey
+		selected, hasSelection := 0, false
+		if active {
+			cards := a.detail.cardList()
+			if a.detail.itemIdx >= 0 && a.detail.itemIdx < len(cards) {
+				selected, hasSelection = cards[a.detail.itemIdx].item.ID, true
+			}
 		}
 		if a.session.Routes == nil {
 			a.session.Routes = map[string][]RouteStep{}
 		}
 		if m.Err != nil || len(m.Steps) == 0 {
 			a.session.Routes[m.ChampKey] = []RouteStep{}
-			if m.Err != nil {
-				return a, toastCmd("Ruta de compra no disponible")
+		} else {
+			a.session.Routes[m.ChampKey] = m.Steps
+		}
+		if active {
+			if hasSelection {
+				for i, card := range a.detail.cardList() {
+					if card.item.ID == selected {
+						a.detail.itemIdx = i
+						break
+					}
+				}
 			}
+			a.detail.clampSel()
+			// Preserve manual scroll, including when the popup is open.
+			a.detail.scrollAnchor = a.detail.itemIdx
+			a.detail.sync()
+		}
+		if m.Err != nil {
+			return a, toastCmd("Ruta de compra no disponible")
+		}
+		return a, nil
+	case hybridLoadedMsg:
+		// La build híbrida llegó: se guarda en la sesión y el detalle
+		// activo se re-renderiza conservando selección y scroll.
+		if a.session == nil || a.session.Game != model.GameDeadlock || m.ChampKey == "" {
 			return a, nil
 		}
-		a.session.Routes[m.ChampKey] = m.Steps
-		if a.screen == screenDetail && a.detail.champ.Key == m.ChampKey {
-			a.detail.scrollAnchor = -1 // reacomoda el auto-scroll
+		if a.session.Hybrids == nil {
+			a.session.Hybrids = map[string]*HybridBuildView{}
+		}
+		if m.Build != nil {
+			m.Build.Key = a.session.HybridKey
+		}
+		a.session.Hybrids[m.ChampKey] = m.Build
+		active := a.screen == screenDetail && a.detail.champ != nil && a.detail.champ.Key == m.ChampKey
+		if active {
+			selected, hasSelection := 0, false
+			cards := a.detail.cardList()
+			if a.detail.itemIdx >= 0 && a.detail.itemIdx < len(cards) {
+				selected, hasSelection = cards[a.detail.itemIdx].item.ID, true
+			}
+			if hasSelection {
+				for i, card := range a.detail.cardList() {
+					if card.item.ID == selected {
+						a.detail.itemIdx = i
+						break
+					}
+				}
+			}
+			a.detail.clampSel()
+			a.detail.scrollAnchor = a.detail.itemIdx
 			a.detail.sync()
+		}
+		if m.Err != nil {
+			return a, toastCmd("Build híbrida no disponible")
 		}
 		return a, nil
 	case clearToastMsg:
@@ -820,7 +889,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.cfg.SeenHint = true
 					a.cfg.Save()
 				}
-				return a, runsCmdFor(a)
+				return a, tea.Batch(runsCmdFor(a), hybridCmdFor(a))
 			case "esc":
 				// Primer esc cancela el filtro (lo resuelve buildList);
 				// segundo esc vuelve al selector de juego.
@@ -865,6 +934,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
+// hybridKeyFor compone la clave de vigencia de una build híbrida. La
+// muestra y el catálogo ya están fijados por la sesión (y por la caché
+// de disco); el parche es lo que cambia entre sesiones. Un cambio de
+// filtros que afecte a la generación debe pasar por `extra`.
+func hybridKeyFor(patch, extra string) string {
+	return patch + "|" + extra
+}
+
 // runsCmdFor dispara la carga bajo demanda de la ruta del héroe del
 // detalle activo: solo Deadlock con loader y ruta no pedida aún.
 // Devuelve nil cuando no aplica.
@@ -881,6 +958,32 @@ func runsCmdFor(a App) tea.Cmd {
 	}
 	a.session.Routes[key] = nil // marca "en curso" hasta que llegue el msg
 	return loadRunsCmd(a.session.Runs, key)
+}
+
+// hybridCmdFor dispara el cálculo de la build híbrida del héroe activo.
+// Reutiliza el resultado ya calculado si sigue vigente en la sesión: al
+// volver a un héroe no se repite el procesamiento.
+func hybridCmdFor(a App) tea.Cmd {
+	if a.session == nil || a.session.Game != model.GameDeadlock || a.session.HybridLoader == nil {
+		return nil
+	}
+	key := a.detail.champ.Key
+	if a.session.Hybrids == nil {
+		a.session.Hybrids = map[string]*HybridBuildView{}
+	}
+	if hb, ok := a.session.Hybrids[key]; ok {
+		// Reutilizar solo si la build guardada sigue vigente.
+		if hb == nil {
+			return nil // en curso
+		}
+		if hb.Key == a.session.HybridKey {
+			return nil
+		}
+		// Clave distinta: resultado obsoleto, se descarta y se recalcula.
+		delete(a.session.Hybrids, key)
+	}
+	a.session.Hybrids[key] = nil // marca "en curso"
+	return loadHybridCmd(a.session.HybridLoader, key)
 }
 
 // updatePick maneja el selector de juego.

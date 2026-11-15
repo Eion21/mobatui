@@ -320,11 +320,21 @@ type cardItem struct {
 	ward         bool
 	kind         cardKind
 	order        int     // posición en la ruta de consenso (1..n), 0 = sin ruta
+	step         int     // número de paso visible (1..m), 0 = fuera de la ruta
 	baseID       int     // de la mejora: su base (0 = compra directa)
 	baseName     string  // nombre de la base para la línea `de X`
 	chainRate    float64 // de la mejora: fracción que viene de baseID
 	upgradedRate float64 // de la compra: fracción de compradores que luego la mejoran
 	routeT       int     // segundo mediano de la ruta (0 = usar AvgBuyS)
+	// Campos de la build híbrida (0/vacío = tarjeta de la ruta observada).
+	hybrid       bool
+	hybridPhase  int
+	hybridConf   float64
+	hybridShare  float64
+	hybridOrigin []string
+	hybridReason string
+	// hybridSection distingue ruta, ampliaciones y situacionales.
+	hybridSection HybridSection
 }
 
 // dlMinuteOf elige el minuto que representa la tarjeta: el mediano de
@@ -368,6 +378,101 @@ func (d detailView) dlDecorate(cards []cardItem) []cardItem {
 	return cards
 }
 
+// hybridCards construye las tarjetas desde la build híbrida del héroe.
+// Devuelve ok=false cuando no hay build calculada: el llamador cae a la
+// ruta observada.
+//
+// El orden es el de la secuencia de compra (minuto ascendente), con las
+// ampliaciones y los situacionales al final en sus propias secciones.
+// Los números de paso son continuos sobre la ruta estándar.
+func (d detailView) hybridCards() ([]cardItem, bool) {
+	hb := d.session.Hybrids[d.champ.Key]
+	if hb == nil || len(hb.Standard) == 0 {
+		return nil, false
+	}
+	// Una build calculada con otra clave (parche, filtros) está
+	// obsoleta: no se sirve. Se cae a la ruta observada mientras se
+	// recalcula.
+	if hb.Key != d.session.HybridKey {
+		return nil, false
+	}
+	byID := make(map[int]model.RankedItem, len(d.CurrentBuild().CoreItems))
+	for _, it := range d.CurrentBuild().CoreItems {
+		byID[it.ID] = it
+	}
+	var out []cardItem
+	step := 0
+	for _, hs := range hb.Standard {
+		it, ok := byID[hs.Item]
+		if !ok {
+			continue // sin estadísticas del ítem: no se inventa una tarjeta
+		}
+		step++
+		c := cardItem{
+			item:          it,
+			order:         step,
+			step:          step,
+			routeT:        hs.Minute * 60,
+			hybrid:        true,
+			hybridPhase:   hs.Phase,
+			hybridConf:    hs.Confidence,
+			hybridShare:   hs.Share,
+			hybridOrigin:  hs.Origin,
+			hybridReason:  hs.Reason,
+			hybridSection: SectionStandard,
+		}
+		// Cadena: si el objeto consume un componente, la tarjeta lo
+		// declara como mejora para que la relación sea legible.
+		if hs.ConsumedBy == 0 && len(hs.Chain) > 1 {
+			base := hs.Chain[len(hs.Chain)-2]
+			if _, ok := byID[base]; ok {
+				c.kind = kindUpgrade
+				c.baseID = base
+				c.baseName = d.session.ItemName(base)
+				c.chainRate = 1
+			}
+		}
+		if hs.ConsumedBy != 0 {
+			// Paso intermedio: se marca como mejora de su base y se
+			// sabe que otro objeto lo consume.
+			if len(hs.Chain) > 1 {
+				base := hs.Chain[len(hs.Chain)-2]
+				c.kind = kindUpgrade
+				c.baseID = base
+				c.baseName = d.session.ItemName(base)
+				c.chainRate = 1
+			}
+		}
+		out = append(out, c)
+	}
+	// Ampliaciones y situacionales: sin número de paso (no son parte de
+	// la ruta), en secciones propias.
+	addExtra := func(steps []HybridStep, section HybridSection) {
+		for _, hs := range steps {
+			it, ok := byID[hs.Item]
+			if !ok {
+				continue
+			}
+			out = append(out, cardItem{
+				item:          it,
+				order:         0,
+				step:          0,
+				routeT:        hs.Minute * 60,
+				hybrid:        true,
+				hybridPhase:   hs.Phase,
+				hybridConf:    hs.Confidence,
+				hybridShare:   hs.Share,
+				hybridOrigin:  hs.Origin,
+				hybridReason:  hs.Reason,
+				hybridSection: section,
+			})
+		}
+	}
+	addExtra(hb.Extensions, SectionExtensions)
+	addExtra(hb.Situationals, SectionSituationals)
+	return out, true
+}
+
 // cardList aplana core+botas para la navegación. Un campeón sin build
 // (rol no canónico) devuelve lista vacía en vez de reventar.
 func (d detailView) cardList() []cardItem {
@@ -383,7 +488,15 @@ func (d detailView) cardList() []cardItem {
 		out = append(out, cardItem{item: bt, boot: true})
 	}
 	if d.session.Game == model.GameDeadlock {
-		return d.filterUpgrades(d.dlBuildCards(d.dlDecorate(out)))
+		// Con build híbrida disponible, las tarjetas salen de ella: el
+		// motor de dominio ya decidió qué entra, en qué orden y con qué
+		// cadena. La UI no repite estadística.
+		if cards, ok := d.hybridCards(); ok {
+			return cards
+		}
+		// Sin build híbrida (cargando, error o muestra corta): ruta
+		// observada, comportamiento anterior intacto.
+		return numberSteps(d.filterUpgrades(d.dlBuildCards(d.dlDecorate(out))))
 	}
 	// LoL: una sola bota como recomendación visible; el resto va
 	// plegado al pie de la sección BOTAS (casi nadie compra la cuarta
@@ -519,6 +632,25 @@ func (d detailView) dlBuildCards(all []cardItem) []cardItem {
 	return build
 }
 
+// numberSteps asigna a cada tarjeta de la ruta un número de paso
+// consecutivo (1..m) sobre la lista YA filtrada. `order` es la posición
+// en la ruta de consenso y se conserva para el detalle y las
+// explicaciones, pero no puede usarse como número visible: al cortar
+// por fase o plegar mejoras quedan huecos (7 → 9). El número de paso
+// describe lo que el jugador ve, no lo que la ruta contenía.
+func numberSteps(cards []cardItem) []cardItem {
+	step := 0
+	for i := range cards {
+		if cards[i].order == 0 {
+			cards[i].step = 0 // fuera de la ruta: sin número
+			continue
+		}
+		step++
+		cards[i].step = step
+	}
+	return cards
+}
+
 // filterUpgrades aplica el toggle `u` (mejoras sí/no): quien solo
 // quiere compras nuevas puede plegar las tarjetas de mejora.
 func (d detailView) filterUpgrades(cards []cardItem) []cardItem {
@@ -584,7 +716,7 @@ func dlPhaseOf(s int) int {
 	}
 }
 
-var dlPhaseNames = []string{"EARLY (0-10 min)", "MID (10-20 min)", "LATE (20+ min)"}
+var dlPhaseNames = []string{"EARLY", "MID", "LATE"}
 
 // ─── vista ─────────────────────────────────────────────────────────
 
@@ -760,10 +892,13 @@ func (d detailView) activeSection() string {
 	active := ""
 	for i, s := range sections {
 		if i%2 == 0 { // posiciones pares: títulos de sección
-			if line > off {
-				break
+			trimmed := strings.TrimSpace(s)
+			if strings.Contains(trimmed, "◆ ") {
+				if line > off {
+					break
+				}
+				active = trimmed
 			}
-			active = strings.TrimSpace(s)
 		}
 		line += lipgloss.Height(s)
 	}
@@ -779,7 +914,48 @@ func (d detailView) headerBlock() string {
 			header = lipgloss.JoinHorizontal(lipgloss.Top, header, " ", side)
 		}
 	}
+	// Cabecera compacta en dos casos:
+	//   1. La completa no deja viewport utilizable. El umbral se calcula
+	//      con el alto real de la cabecera, no con un número fijo: con
+	//      retrato son ~10 líneas, así que a 20 filas ya no cabe nada.
+	//   2. El usuario se desplazó: mientras navega compras interesa el
+	//      contenido, no el retrato. Al volver arriba se recupera.
+	if d.height > 0 && !d.headerFits(header) {
+		return d.compactHeader()
+	}
+	if d.scrolled() {
+		return d.compactHeader()
+	}
 	return header
+}
+
+// headerFits dice si la cabecera completa deja un viewport usable.
+// Se reserva el mínimo del viewport (6) más pestañas, pie y bordes.
+func (d detailView) headerFits(header string) bool {
+	const minViewport = 6
+	const chrome = 1 + 1 + 2 + 1 // pestañas + pie + bordes + aire
+	return d.height-lipgloss.Height(header)-chrome >= minViewport
+}
+
+// scrolled indica que el viewport no está al principio. Solo cuenta en
+// la pestaña de ítems: en las demás el scroll no cambia la cabecera.
+func (d detailView) scrolled() bool {
+	return d.tab == 0 && d.vp.YOffset > 0
+}
+
+// compactHeader es la cabecera de una línea para terminales muy bajas:
+// nombre y, si cabe, el parche. Sin retrato ni tendencia.
+func (d detailView) compactHeader() string {
+	b := d.CurrentBuild()
+	name := stTitle.Render(d.champ.Name)
+	if b == nil {
+		return name
+	}
+	rest := stDim.Render(" · " + b.Patch)
+	if lipgloss.Width(name)+lipgloss.Width(rest) > d.width-2 {
+		return name
+	}
+	return name + rest
 }
 
 // keepPanelBG repone el fondo del panel tras cada reset ANSI interno:
@@ -967,7 +1143,13 @@ func (d detailView) tabView() string {
 func (d detailView) itemsView() string {
 	cards := d.cardList()
 	if len(cards) == 0 {
-		return stDim.Render("sin ítems con muestra suficiente (filtro: ≥100 partidas o ≥20 con ≥5% pick)")
+		message := stDim.Render("sin ítems con muestra suficiente (filtro: ≥100 partidas o ≥20 con ≥5% pick)")
+		if d.session.Game == model.GameDeadlock {
+			if status := d.routeStatus(); status != "" {
+				return stDim.Render(status) + "\n" + message
+			}
+		}
+		return message
 	}
 	sections, _ := d.itemsSections(cards)
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
@@ -1151,28 +1333,292 @@ func (d detailView) orderSection() []string {
 	return nil
 }
 
+// routeStatus distinguishes an in-flight request from an unavailable route.
+func (d detailView) routeStatus() string {
+	// La build híbrida manda cuando existe; si está en curso, se dice.
+	if d.session.HybridLoader != nil {
+		if hb, requested := d.session.Hybrids[d.champ.Key]; requested {
+			if hb != nil {
+				return ""
+			}
+			return "Calculando build…"
+		}
+	}
+	steps, requested := d.session.Routes[d.champ.Key]
+	if len(steps) > 0 {
+		return ""
+	}
+	if (requested && steps == nil) || (!requested && d.session.Runs != nil) {
+		return "Cargando ruta de compra…"
+	}
+	return "Ruta no disponible — mostrando estadísticas generales"
+}
+
+// dlRouteHeader builds the compact single-line header shown before the
+// first phase (EARLY). Format adapts to terminal width:
+//
+//	wide:   "Ruta observada · 137 partidas · aparición ≥30 %"
+//	narrow: "Ruta observada · 137 partidas"
+//	no route: ""
+func (d detailView) dlRouteHeader() string {
+	steps := d.session.Routes[d.champ.Key]
+	if len(steps) == 0 {
+		return ""
+	}
+	st := steps[0]
+	// Always show at minimum: "Ruta observada · N partidas"
+	parts := []string{"Ruta observada"}
+	if st.SampleSize > 0 {
+		parts = append(parts, fmt.Sprintf("%d partidas", st.SampleSize))
+	}
+	header := strings.Join(parts, " · ")
+	// Append threshold only when it fits (terminals ≥50 cols).
+	if st.MinShare > 0 && d.width >= 50 {
+		threshold := fmt.Sprintf("aparición ≥%g%%", st.MinShare*100)
+		full := header + " · " + threshold
+		if lipgloss.Width(full) <= d.width-4 {
+			header = full
+		}
+	}
+	return stDim.Render(header)
+}
+
+// hasHybridCards informa si las tarjetas vienen de la build híbrida.
+func (d detailView) hasHybridCards(cards []cardItem) bool {
+	return len(cards) > 0 && cards[0].hybrid
+}
+
+// hybridSections pinta la build híbrida: la ruta estándar agrupada por
+// fase (EARLY, MID, LATE), luego AMPLIACIONES y SITUACIONALES. Las
+// tarjetas conservan su número de paso continuo; las ampliaciones y
+// situacionales no llevan número porque no son parte de la ruta.
+func (d detailView) hybridSections(cards []cardItem) (sections []string, starts []int) {
+	perRow := d.cardsPerRow()
+	starts = make([]int, len(cards))
+	line := 0
+
+	emit := func(title string, start, end int) {
+		var rows []string
+		line += lipgloss.Height(title)
+		for i := start; i < end; i += perRow {
+			rowEnd := min(i+perRow, end)
+			var rowCards []string
+			for j := i; j < rowEnd; j++ {
+				rowCards = append(rowCards, zoneMgr.Mark(fmt.Sprintf("card:%d", j), d.itemCard(j, cards[j])))
+				starts[j] = line
+			}
+			row := lipgloss.JoinHorizontal(lipgloss.Top, rowCards...)
+			rows = append(rows, row)
+			line += lipgloss.Height(row)
+		}
+		sections = append(sections, stSection.Render(title), strings.Join(rows, "\n"))
+	}
+
+	// emitIndices emite una sección con un subconjunto arbitrario de
+	// tarjetas (no contiguo). Se usa para agrupar situacionales por
+	// función sin reordenar la lista de navegación.
+	emitIndices := func(title string, cards []cardItem, idx []int) {
+		var rows []string
+		line += lipgloss.Height(title)
+		for i := 0; i < len(idx); i += perRow {
+			end := min(i+perRow, len(idx))
+			var rowCards []string
+			for j := i; j < end; j++ {
+				k := idx[j]
+				rowCards = append(rowCards, zoneMgr.Mark(fmt.Sprintf("card:%d", k), d.itemCard(k, cards[k])))
+				starts[k] = line
+			}
+			row := lipgloss.JoinHorizontal(lipgloss.Top, rowCards...)
+			rows = append(rows, row)
+			line += lipgloss.Height(row)
+		}
+		sections = append(sections, stSection.Render(title), strings.Join(rows, "\n"))
+	}
+
+	// emitFiltered emite las tarjetas de [start,end) cuya función sea fn.
+	emitFiltered := func(title string, cards []cardItem, start, end int, fn string) {
+		var idx []int
+		for i := start; i < end; i++ {
+			if cards[i].hybridReason == fn {
+				idx = append(idx, i)
+			}
+		}
+		if len(idx) == 0 {
+			return
+		}
+		emitIndices(title, cards, idx)
+	}
+
+	// Cabecera compacta: una sola línea, sin explicaciones largas.
+	if hdr := d.hybridHeader(); hdr != "" {
+		sections = append(sections, hdr, "")
+		line += lipgloss.Height(hdr)
+	}
+
+	// Ruta estándar por fase, en el orden en que llegan las tarjetas.
+	phase := -1
+	for start := 0; start < len(cards); {
+		if cards[start].hybridSection != SectionStandard {
+			break
+		}
+		if p := cards[start].hybridPhase; p > phase {
+			phase = p
+		}
+		end := start + 1
+		for end < len(cards) {
+			if cards[end].hybridSection != SectionStandard {
+				break
+			}
+			if cards[end].hybridPhase > phase {
+				break
+			}
+			end++
+		}
+		emit("◆ "+dlPhaseNames[min(phase, len(dlPhaseNames)-1)], start, end)
+		start = end
+	}
+
+	// Ampliaciones: una sola sección, ya vienen en orden cronológico.
+	if start, end := sectionRange(cards, SectionExtensions); start >= 0 {
+		emit("◆ AMPLIACIONES", start, end)
+	}
+
+	// Situacionales agrupados por función: la etiqueta ya existe y es
+	// verificable; agruparla convierte una lista larga en categorías
+	// escaneables. El orden de los grupos es fijo (no alfabético) para
+	// que la posición sea estable entre héroes.
+	if start, end := sectionRange(cards, SectionSituationals); start >= 0 {
+		for _, fn := range situationalOrder {
+			gStart, gEnd := -1, -1
+			for i := start; i < end; i++ {
+				if cards[i].hybridReason != fn {
+					continue
+				}
+				if gStart < 0 {
+					gStart = i
+				}
+				gEnd = i + 1
+			}
+			if gStart < 0 {
+				continue
+			}
+			// Un grupo puede tener huecos si el orden mezcla funciones:
+			// se emiten solo las tarjetas de esa función.
+			emitFiltered("◆ SITUACIONALES · "+fn, cards, gStart, gEnd, fn)
+		}
+		// Objetos sin función reconocida: se listan al final, sin
+		// inventarles categoría.
+		var rest []int
+		for i := start; i < end; i++ {
+			known := false
+			for _, fn := range situationalOrder {
+				if cards[i].hybridReason == fn {
+					known = true
+					break
+				}
+			}
+			if !known {
+				rest = append(rest, i)
+			}
+		}
+		if len(rest) > 0 {
+			emitIndices("◆ SITUACIONALES", cards, rest)
+		}
+	}
+	return sections, starts
+}
+
+// situationalOrder fija el orden de los grupos de situacionales.
+var situationalOrder = []string{
+	"Anticuración",
+	"Defensa contra balas",
+	"Defensa espiritual",
+	"Resistencia al control",
+	"Supervivencia",
+	"Daño adicional",
+}
+
+// sectionRange devuelve el rango contiguo de tarjetas de una sección.
+func sectionRange(cards []cardItem, kind HybridSection) (start, end int) {
+	start = -1
+	for i, c := range cards {
+		if c.hybridSection == kind {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return -1, -1
+	}
+	end = start
+	for end < len(cards) && cards[end].hybridSection == kind {
+		end++
+	}
+	return start, end
+}
+
+// hybridHeader es la línea de contexto de la build híbrida: confianza
+// global y objetos finales. Corta y sin jerga estadística.
+func (d detailView) hybridHeader() string {
+	hb := d.session.Hybrids[d.champ.Key]
+	if hb == nil {
+		return ""
+	}
+	parts := []string{"Build híbrida"}
+	if hb.FinalItems > 0 {
+		parts = append(parts, fmt.Sprintf("%d objetos finales", hb.FinalItems))
+	}
+	parts = append(parts, "confianza "+ConfidenceWord(hb.Confidence))
+	hdr := strings.Join(parts, " · ")
+	if lipgloss.Width(hdr) > d.width-4 {
+		hdr = "Build híbrida · confianza " + ConfidenceWord(hb.Confidence)
+	}
+	return stDim.Render(hdr)
+}
+
+// ConfidenceWord traduce la confianza a una palabra. Nunca se presenta
+// como probabilidad de victoria.
+func ConfidenceWord(c float64) string {
+	switch {
+	case c >= 0.70:
+		return "alta"
+	case c >= 0.45:
+		return "moderada"
+	default:
+		return "baja"
+	}
+}
+
 // itemsSectionsDL preserves route order; phase headings only annotate
 // contiguous time bands, never move an action ahead of another route
 // step. A step whose own minute falls in an earlier band stays with
 // the current band (no EARLY reopens below MID): the route is the
-// story, the phase is a reading aid. Situationals (outside the route)
-// close the list in one section of their own.
+// story, the phase is a reading aid. Items outside the route close the
+// list in one section of their own.
+//
+// A single compact header appears before the first phase; the extended
+// provenance (sample differences, "Fuera de la ruta" explanation) is
+// available in the item popup (Enter) and the existing help.
 func (d detailView) itemsSectionsDL(cards []cardItem) (sections []string, starts []int) {
+	// Con build híbrida, las secciones son las de la build (EARLY, MID,
+	// LATE, AMPLIACIONES, SITUACIONALES), no las de la ruta observada.
+	if d.hasHybridCards(cards) {
+		return d.hybridSections(cards)
+	}
 	perRow := d.cardsPerRow()
 	starts = make([]int, len(cards))
 	line := 0
 	withRoute := len(d.session.Routes[d.champ.Key]) > 0
-	label := "Compras"
-	if withRoute {
-		label = "RUTA"
-	}
-	emit := func(title string, start, end int) {
-		// activeSection expects alternating title/body pairs, not individual rows.
+
+	emit := func(title string, start, end int, outside bool) {
+		// activeSection expects alternating title/body pairs.
 		var rows []string
-		line++
-		if start == 0 {
-			rows = append(rows, stDim.Render(label+" · minutos orientativos · Enter: estadísticas"))
-			line++
+		line += lipgloss.Height(title)
+		if outside {
+			desc := lipgloss.NewStyle().Width(max(24, d.width-10)).Render(
+				stDim.Render("Compras registradas en las estadísticas generales que no forman parte de esta ruta"))
+			rows = append(rows, desc)
+			line += lipgloss.Height(desc)
 		}
 		for i := start; i < end; i += perRow {
 			rowEnd := min(i+perRow, end)
@@ -1187,10 +1633,57 @@ func (d detailView) itemsSectionsDL(cards []cardItem) (sections []string, starts
 		}
 		sections = append(sections, stSection.Render(title), strings.Join(rows, "\n"))
 	}
+
+	if !withRoute {
+		title := stDim.Render(d.routeStatus()) + "\n" + stSection.Render("◆ Compras frecuentes")
+		emit(title, 0, len(cards), false)
+		return sections, starts
+	}
+
+	// Single compact header before the first phase.
+	if hdr := d.dlRouteHeader(); hdr != "" {
+		sections = append(sections, hdr, "")
+		line += lipgloss.Height(hdr)
+	}
+
+	disclaimerEmitted := false
+	emitWithDisclaimer := func(title string, start, end int, outside bool) {
+		if !disclaimerEmitted {
+			disclaimerEmitted = true
+			var rows []string
+			line += lipgloss.Height(title)
+
+			disc := lipgloss.NewStyle().Width(max(24, d.width-10)).Render(
+				stDim.Render("Las estadísticas generales y la ruta pueden proceder de muestras diferentes"))
+			rows = append(rows, disc)
+			line += lipgloss.Height(disc)
+			if outside {
+				out := lipgloss.NewStyle().Width(max(24, d.width-10)).Render(
+					stDim.Render("Compras registradas en las estadísticas generales que no forman parte de esta ruta"))
+				rows = append(rows, out)
+				line += lipgloss.Height(out)
+			}
+			for i := start; i < end; i += perRow {
+				rowEnd := min(i+perRow, end)
+				var rowCards []string
+				for j := i; j < rowEnd; j++ {
+					rowCards = append(rowCards, zoneMgr.Mark(fmt.Sprintf("card:%d", j), d.itemCard(j, cards[j])))
+					starts[j] = line
+				}
+				row := lipgloss.JoinHorizontal(lipgloss.Top, rowCards...)
+				rows = append(rows, row)
+				line += lipgloss.Height(row)
+			}
+			sections = append(sections, stSection.Render(title), strings.Join(rows, "\n"))
+			return
+		}
+		emit(title, start, end, outside)
+	}
+
 	phase := -1
 	for start := 0; start < len(cards); {
 		if withRoute && cards[start].order == 0 {
-			emit("◆ SITUACIONALES", start, len(cards))
+			emit("◆ Fuera de la ruta", start, len(cards), true)
 			break
 		}
 		if p := dlPhaseOf(cards[start].dlMinuteOf()); p > phase {
@@ -1206,7 +1699,7 @@ func (d detailView) itemsSectionsDL(cards []cardItem) (sections []string, starts
 			}
 			end++
 		}
-		emit("◆ "+dlPhaseNames[phase], start, end)
+		emitWithDisclaimer("◆ "+dlPhaseNames[phase], start, end, false)
 		start = end
 	}
 	return sections, starts
@@ -1599,7 +2092,51 @@ func (d detailView) skillsView() string {
 	if legend := d.abilityLegend(); legend != "" {
 		out = lipgloss.JoinVertical(lipgloss.Left, out, "", legend)
 	}
+	// Aviso ARRIBA del panel, no escondido en la leyenda: si las
+	// posiciones no están verificadas, el jugador debe saberlo antes de
+	// leer la matriz.
+	if b.Game == model.GameDeadlock && !b.CanonicalSkillOrder {
+		warn := stWinrateBad.Render("Orden por uso · posiciones no verificadas")
+		out = lipgloss.JoinVertical(lipgloss.Left, warn, "", out)
+	}
 	return out
+}
+
+// skillLabelWidth calcula el ancho de la columna de nombres de
+// habilidad. Se ajusta al nombre más largo para no truncar cuando hay
+// espacio, y se recorta solo si la matriz de niveles no cabría.
+//
+// Antes era fijo en 18: "Abstract Landscape" (18 caracteres + tecla)
+// se truncaba aunque la terminal tuviera sitio de sobra.
+func (d detailView) skillLabelWidth() int {
+	b := d.CurrentBuild()
+	if b == nil {
+		return 18
+	}
+	// Ancho necesario: tecla + espacio + nombre más largo.
+	longest := 0
+	for _, slot := range b.SkillAlphabet {
+		if n, ok := b.AbilityNames[slot]; ok {
+			if w := runewidth.StringWidth(n); w > longest {
+				longest = w
+			}
+		}
+	}
+	want := longest + 2 // "1 " delante
+	if want < 6 {
+		want = 6
+	}
+	// Tope: dejar sitio a la matriz (3 celdas por nivel, 15 niveles).
+	const levels = 15
+	const cell = 3
+	maxW := d.width - 4 - levels*cell
+	if maxW < 10 {
+		maxW = 10
+	}
+	if want > maxW {
+		want = maxW
+	}
+	return want
 }
 
 // abilityGrid: filas por habilidad, columnas por nivel, celdas de 3.
@@ -1607,7 +2144,7 @@ func (d detailView) abilityGrid(seq []rune) string {
 	b := d.CurrentBuild()
 	labelW := 6
 	if b.Game == model.GameDeadlock {
-		labelW = 18
+		labelW = d.skillLabelWidth()
 	}
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat(" ", labelW))
@@ -1631,29 +2168,44 @@ func (d detailView) abilityGrid(seq []rune) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+// slotLabel devuelve la referencia visible de un espacio de habilidad.
+// Con orden canónico es la tecla real (1..4). Sin él, una letra neutral
+// (A, B, C…): presentar "5" o "6" como si fueran teclas sería engañoso.
+func slotLabel(ab rune, canonical bool) string {
+	if canonical {
+		return string(ab)
+	}
+	// '1' → 'A', '2' → 'B', …
+	if ab >= '1' && ab <= '9' {
+		return string(rune('A' + (ab - '1')))
+	}
+	return string(ab)
+}
+
 // abilityLabel: "Q" para LoL; "1 Siphon Life" para Deadlock.
 func (d detailView) abilityLabel(ab rune, w int) string {
 	b := d.CurrentBuild()
 	if b.Game == model.GameDeadlock {
 		if n, ok := b.AbilityNames[ab]; ok {
-			label := fmt.Sprintf("%c %s", ab, truncate(n, w-2))
+			label := fmt.Sprintf("%s %s", slotLabel(ab, b.CanonicalSkillOrder), truncate(n, w-2))
 			return padStyled(skillStyle(ab).Render(label), w)
 		}
 	}
-	return padStyled(skillStyle(ab).Render(string(ab)), w)
+	return padStyled(skillStyle(ab).Render(slotLabel(ab, b.CanonicalSkillOrder)), w)
 }
 
 // abilityLegend nombra cada slot de habilidad cuando el juego lo
 // permite (Deadlock real).
 func (d detailView) abilityLegend() string {
-	names := d.CurrentBuild().AbilityNames
+	b := d.CurrentBuild()
+	names := b.AbilityNames
 	if len(names) == 0 {
 		return ""
 	}
 	parts := make([]string, 0, len(names))
 	for _, slot := range d.CurrentBuild().SkillAlphabet {
 		if n, ok := names[slot]; ok {
-			parts = append(parts, skillStyle(slot).Render(string(slot))+" "+stDim.Render(n))
+			parts = append(parts, skillStyle(slot).Render(slotLabel(slot, b.CanonicalSkillOrder))+" "+stDim.Render(n))
 		}
 	}
 	return strings.Join(parts, stDim.Render(" · "))
@@ -1667,7 +2219,7 @@ func (d detailView) priorityLine() string {
 	}
 	var parts []string
 	for _, sk := range b.SkillOrder.Priority {
-		parts = append(parts, skillStyle(sk).Render(string(sk)))
+		parts = append(parts, skillStyle(sk).Render(slotLabel(sk, b.CanonicalSkillOrder)))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -1711,8 +2263,8 @@ func (d detailView) itemPopup() string {
 	}
 	// Ruta de compra (Deadlock): orden de consenso, cadena y tasa de
 	// mejora de la base. Sin ruta: el popup queda como siempre.
-	if c.order > 0 {
-		tag = stDim.Render(fmt.Sprintf(" · ruta #%d", c.order))
+	if c.step > 0 {
+		tag = stDim.Render(fmt.Sprintf(" · paso %d", c.step))
 	}
 	if c.kind == kindUpgrade {
 		tag = stDim.Render(fmt.Sprintf(" · de %s (%d%%)",
@@ -1755,6 +2307,26 @@ func (d detailView) itemPopup() string {
 		}
 		lines = append(lines[:3], append([]string{"",
 			stDim.Render(ruta)}, lines[3:]...)...)
+	}
+	// Build híbrida: confianza, procedencia y motivo. La confianza se
+	// presenta como etiqueta cualitativa, nunca como probabilidad.
+	if c.hybrid {
+		conf := fmt.Sprintf("  confianza %s", ConfidenceWord(c.hybridConf))
+		if c.hybridShare > 0 {
+			conf += fmt.Sprintf(" · aparece en %.0f%% de las partidas", c.hybridShare*100)
+		}
+		lines = append(lines[:3], append([]string{"", stDim.Render(conf)}, lines[3:]...)...)
+		if len(c.hybridOrigin) > 0 {
+			lines = append(lines[:4], append([]string{
+				stDim.Render("  procedencia " + strings.Join(c.hybridOrigin, ", ")),
+			}, lines[4:]...)...)
+		}
+		if c.hybridReason != "" && c.hybridSection != SectionSituationals {
+			lines = append(lines, "", stValue.Render("  "+c.hybridReason))
+		}
+		if c.hybridSection == SectionSituationals {
+			lines = append(lines, "", stValue.Render("  función: "+c.hybridReason))
+		}
 	}
 	// Metadatos del ítem (Deadlock): tier, categoría, coste y pasiva.
 	if info, ok := d.session.ItemMeta[it.ID]; ok && info.Category != "" {

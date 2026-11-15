@@ -310,9 +310,9 @@ func TestDetailViewRenderDeadlock(t *testing.T) {
 	for _, want := range []string{
 		"Abrams",
 		"1 Ítems", "2 Resumen", "3 Matchups", "4 Habilidades",
-		// Los fixtures no traen tiempo de compra: todo cae en EARLY
-		// (con la API real aparecen MID y LATE por avg_buy_time_s).
-		"EARLY",
+		// Sin cargador de rutas, se muestran estadísticas sin fases inventadas.
+		"Ruta no disponible — mostrando estadísticas generales",
+		"Compras frecuentes",
 		"max",
 	} {
 		if !strings.Contains(v, want) {
@@ -320,7 +320,7 @@ func TestDetailViewRenderDeadlock(t *testing.T) {
 		}
 	}
 	// Sin roles ni runas: esas secciones no deben aparecer.
-	for _, unwanted := range []string{"roles", "Runas", "BOTAS", "CORE"} {
+	for _, unwanted := range []string{"roles", "Runas", "BOTAS", "CORE", "EARLY", "MID", "LATE"} {
 		if strings.Contains(v, unwanted) {
 			t.Errorf("vista Deadlock mostró %q, que no aplica al juego", unwanted)
 		}
