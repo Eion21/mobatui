@@ -43,12 +43,52 @@ func servidorLento(t *testing.T, latencia time.Duration, hits *int64) *Client {
 	return New(c).WithBase(srv.URL).WithHTTPClient(srv.Client()).WithDelay(0)
 }
 
-// TestCargaEnParaleloEsMasRapida: la carga secuencial esperaba la
-// latencia de cada una de las ~200 páginas una detrás de otra. Con el
-// pool, 5 páginas de 60 ms deben tardar bastante menos que la suma.
+// servidorConcurrente cuenta cuántas peticiones de build hay en vuelo a
+// la vez y devuelve el máximo observado. Mide la propiedad que importa
+// (solapamiento) sin depender de la velocidad de la máquina.
+func servidorConcurrente(t *testing.T, latencia time.Duration) (*Client, *int64) {
+	t.Helper()
+	var enVuelo, maximo int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/lol/tierlist/", func(w http.ResponseWriter, r *http.Request) {
+		l := r.URL.Query().Get("lane")
+		if l == "" {
+			l = "top"
+		}
+		rows := [][3]any{{103, l, 4200}}
+		w.Write([]byte(tierlistHTML(l, rows)))
+	})
+	mux.HandleFunc("/lol/ahri/build/", func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&enVuelo, 1)
+		for {
+			m := atomic.LoadInt64(&maximo)
+			if n <= m || atomic.CompareAndSwapInt64(&maximo, m, n) {
+				break
+			}
+		}
+		time.Sleep(latencia)
+		atomic.AddInt64(&enVuelo, -1)
+		w.Write([]byte(buildPageHTML()))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c, err := cache.New(filepath.Join(t.TempDir(), "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(c).WithBase(srv.URL).WithHTTPClient(srv.Client()).WithDelay(0), &maximo
+}
+
+// TestCargaEnParaleloEsMasRapida: el pool debe solapar las peticiones.
+//
+// La comprobación principal es la concurrencia observada en el servidor:
+// con carga secuencial el máximo en vuelo sería 1, con pool debe ser
+// mayor. Eso no depende de la latencia de la máquina, a diferencia de un
+// umbral de tiempo absoluto, que en Windows resultó frágil.
 func TestCargaEnParaleloEsMasRapida(t *testing.T) {
 	const latencia = 60 * time.Millisecond
-	cl := servidorLento(t, latencia, nil)
+	cl, maximo := servidorConcurrente(t, latencia)
 
 	ini := time.Now()
 	cbs, err := cl.LoadBuilds(map[int]string{103: "Ahri"}, nil)
@@ -59,13 +99,14 @@ func TestCargaEnParaleloEsMasRapida(t *testing.T) {
 	if len(cbs) == 0 {
 		t.Fatal("sin builds")
 	}
-	// Secuencial serían ≥ 5 × 60 ms = 300 ms (una página por carril).
-	// Con 4 workers debe quedar bastante por debajo.
-	if transcurrido > 250*time.Millisecond {
-		t.Errorf("la carga tardó %s: el pool no está solapando latencias", transcurrido)
+
+	if got := atomic.LoadInt64(maximo); got < 2 {
+		t.Errorf("máximo de peticiones en vuelo = %d: la carga no está solapando", got)
 	}
-	if transcurrido < latencia {
-		t.Errorf("terminó en %s, menos que una sola página: sospechoso", transcurrido)
+	// Comprobación secundaria, holgada: secuencial serían ~5 × 60 ms.
+	// El margen es amplio a propósito para no depender del runner.
+	if transcurrido > 600*time.Millisecond {
+		t.Errorf("la carga tardó %s: demasiado para un pool con solapamiento", transcurrido)
 	}
 }
 
