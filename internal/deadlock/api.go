@@ -14,16 +14,18 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Eion21/mobatui/internal/cache"
 	"github.com/Eion21/mobatui/internal/model"
+	"github.com/Eion21/mobatui/internal/progression"
 	"github.com/Eion21/mobatui/internal/staticdata"
 )
 
 const (
 	defaultAPIBase = "https://api.deadlock-api.com"
-	userAgent      = "builds-tui/1.0 (+https://github.com/jervis/builds)"
+	userAgent      = "mobatui/1.0 (+https://github.com/Eion21/mobatui)"
 	// TTLs por tipo de recurso.
 	ttlVersions = time.Hour
 	ttlAssets   = 24 * time.Hour
@@ -34,6 +36,18 @@ const (
 	minMatches = 100
 )
 
+type staticSnapshot struct {
+	mu           sync.Mutex
+	heroes       []apiHero
+	heroesErr    error
+	heroesLoaded bool
+	shop         map[int]apiItem
+	abilityNames map[int]string
+	abilityClass map[string]int
+	shopErr      error
+	shopLoaded   bool
+}
+
 // APIClient es el cliente de deadlock-api.com; implementa
 // staticdata.Provider y carga builds reales.
 type APIClient struct {
@@ -42,11 +56,24 @@ type APIClient struct {
 	apiBase      string
 	fixtureDir   string // respaldo estático (testdata/deadlock)
 	fixtureBuild string // fixtures de builds (testdata/deadlock/builds)
+	snapshot     *staticSnapshot
 	// onProgress avisa cuántos héroes van cargados, como el pool de
 	// Lolalytics; nil = a nadie le importa el progreso.
 	onProgress func(done, total int, name string)
 	// fellBack se activa cuando la carga terminó sirviendo fixtures.
 	fellBack bool
+	// runsCat/runsComps memorizan el catálogo de tienda y sus cadenas
+	// para no re-decodificar 782 ítems en cada consulta de ruta.
+	runsCatMu sync.Mutex
+	runsCat   map[int]apiItem
+	runsComps map[int][]int
+	// progCat memoiza el catálogo de progresión (cadenas validadas).
+	progCatMu sync.Mutex
+	progCat   *progression.Catalog
+	// allItemsCache memoiza el catálogo completo de ítems (incluye
+	// habilidades y sus dependent_abilities).
+	allItemsMu    sync.Mutex
+	allItemsCache []apiItem
 }
 
 var _ staticdata.Provider = (*APIClient)(nil)
@@ -138,6 +165,11 @@ type apiHero struct {
 	Description      struct {
 		Role string `json:"role"`
 	} `json:"description"`
+	// Items trae los class_name del kit: signature1..4 son las cuatro
+	// habilidades en el orden canónico del héroe (el que usa el juego
+	// para las teclas 1-4). Es la única fuente fiable del orden: la
+	// frecuencia de uso NO lo es (en Solomon la 3 es la más subida).
+	Items map[string]string `json:"items"`
 }
 
 type apiItem struct {
@@ -154,9 +186,31 @@ type apiItem struct {
 	// que lista a otro en component_items es su mejora directa.
 	ClassName      string   `json:"class_name"`
 	ComponentItems []string `json:"component_items"`
-	Description    struct {
+	// DependentAbilities declara sub-habilidades: una habilidad que
+	// cambia de forma (Silver) expone la variante aquí con el flag
+	// DisplayAsSubAbility. Es la relación canónica del juego, no una
+	// heurística por nombre.
+	DependentAbilities map[string]apiDependent `json:"dependent_abilities"`
+	Description        struct {
 		Desc string `json:"desc"`
 	} `json:"description"`
+}
+
+// apiDependent describe una habilidad dependiente y cómo se relaciona
+// con su principal.
+type apiDependent struct {
+	Flags []string `json:"flags"`
+}
+
+// IsSubAbility indica que la dependiente ocupa el mismo espacio que su
+// principal (cambio de forma), no una tecla propia.
+func (d apiDependent) IsSubAbility() bool {
+	for _, f := range d.Flags {
+		if f == "DisplayAsSubAbility" {
+			return true
+		}
+	}
+	return false
 }
 
 type apiHeroStat struct {
@@ -220,11 +274,27 @@ func (a *APIClient) Version() (string, error) {
 }
 
 func (a *APIClient) heroes() ([]apiHero, error) {
-	var hs []apiHero
-	if err := getJSON(a, "/v1/assets/heroes", "heroes.json", ttlAssets, &hs); err != nil {
-		return nil, err
+	if a.snapshot != nil {
+		a.snapshot.mu.Lock()
+		if a.snapshot.heroesLoaded {
+			hs, err := a.snapshot.heroes, a.snapshot.heroesErr
+			a.snapshot.mu.Unlock()
+			return hs, err
+		}
+		a.snapshot.mu.Unlock()
 	}
-	return hs, nil
+
+	var hs []apiHero
+	err := getJSON(a, "/v1/assets/heroes", "heroes.json", ttlAssets, &hs)
+
+	if a.snapshot != nil {
+		a.snapshot.mu.Lock()
+		a.snapshot.heroes = hs
+		a.snapshot.heroesErr = err
+		a.snapshot.heroesLoaded = true
+		a.snapshot.mu.Unlock()
+	}
+	return hs, err
 }
 
 // Heroes indexados por nombre, solo los seleccionables y publicados.
@@ -264,23 +334,60 @@ func (a *APIClient) HeroNamesByID() map[int]string {
 // shopItems devuelve los ítems de tienda (upgrade+weapon) y, aparte,
 // los nombres de las habilidades por id.
 func (a *APIClient) shopItems() (shop map[int]apiItem, abilityNames map[int]string, err error) {
-	var items []apiItem
-	if err := getJSON(a, "/v1/assets/items", "items.json", ttlAssets, &items); err != nil {
-		return nil, nil, err
+	shop, abilityNames, _, err = a.shopItemsFull()
+	return shop, abilityNames, err
+}
+
+// abilityClassIndex resuelve class_name → id de habilidad del catálogo.
+func (a *APIClient) abilityClassIndex() map[string]int {
+	_, _, class, _ := a.shopItemsFull()
+	return class
+}
+
+// shopItemsFull es shopItems más el índice class_name → id de habilidad,
+// necesario para reconstruir el orden canónico del kit (signature1..4).
+func (a *APIClient) shopItemsFull() (shop map[int]apiItem, abilityNames map[int]string, abilityClass map[string]int, err error) {
+	if a.snapshot != nil {
+		a.snapshot.mu.Lock()
+		if a.snapshot.shopLoaded {
+			s, an, ac, e := a.snapshot.shop, a.snapshot.abilityNames, a.snapshot.abilityClass, a.snapshot.shopErr
+			a.snapshot.mu.Unlock()
+			return s, an, ac, e
+		}
+		a.snapshot.mu.Unlock()
 	}
-	shop = map[int]apiItem{}
-	abilityNames = map[int]string{}
-	for _, it := range items {
-		switch it.Type {
-		case "upgrade", "weapon":
-			shop[it.ID] = it
-		case "ability":
-			if it.Name != "" {
-				abilityNames[it.ID] = it.Name
+
+	var items []apiItem
+	err = getJSON(a, "/v1/assets/items", "items.json", ttlAssets, &items)
+	if err == nil {
+		shop = map[int]apiItem{}
+		abilityNames = map[int]string{}
+		abilityClass = map[string]int{}
+		for _, it := range items {
+			switch it.Type {
+			case "upgrade", "weapon":
+				shop[it.ID] = it
+			case "ability":
+				if it.Name != "" {
+					abilityNames[it.ID] = it.Name
+				}
+				if it.ClassName != "" {
+					abilityClass[it.ClassName] = it.ID
+				}
 			}
 		}
 	}
-	return shop, abilityNames, nil
+
+	if a.snapshot != nil {
+		a.snapshot.mu.Lock()
+		a.snapshot.shop = shop
+		a.snapshot.abilityNames = abilityNames
+		a.snapshot.abilityClass = abilityClass
+		a.snapshot.shopErr = err
+		a.snapshot.shopLoaded = true
+		a.snapshot.mu.Unlock()
+	}
+	return shop, abilityNames, abilityClass, err
 }
 
 // Items id → nombre de los ítems de tienda.
@@ -437,6 +544,9 @@ func (a *APIClient) fetchURL(url string) func() ([]byte, error) {
 // habilidades con sus topes reales. Si la API está inaccesible y no
 // hay caché, cae a los fixtures locales.
 func (a *APIClient) LoadBuilds() ([]*model.ChampionBuilds, error) {
+	a.snapshot = &staticSnapshot{}
+	defer func() { a.snapshot = nil }()
+
 	patch, _ := a.Version()
 	var heroStats []apiHeroStat
 	err := getJSON(a, "/v1/analytics/hero-stats", "", ttlStats, &heroStats)
@@ -455,9 +565,23 @@ func (a *APIClient) LoadBuilds() ([]*model.ChampionBuilds, error) {
 		return nil, err
 	}
 	nameOf := make(map[int]string, len(apiHeroes))
+	heroByID := make(map[int]apiHero, len(apiHeroes))
 	for _, h := range apiHeroes {
 		nameOf[h.ID] = h.Name
+		heroByID[h.ID] = h
 	}
+	// class_name → id de habilidad: resuelve signature1..4 del kit.
+	//
+	// OJO: hay que usar el índice del catálogo COMPLETO. `shop` solo
+	// contiene ítems comprables (upgrade/weapon); las habilidades se
+	// filtran al construirlo, así que derivar el índice de `shop`
+	// devuelve un mapa vacío y canonicalAbilityOrder cae siempre al
+	// fallback por frecuencia. Ese era el fallo de raíz: los slots se
+	// asignaban por popularidad en TODOS los héroes.
+	abilityByClass := a.abilityClassIndex()
+	// class_name → ítem completo: hace falta para leer
+	// dependent_abilities (sub-habilidades de cambio de forma).
+	itemsByClass := a.abilityItemsByClass()
 	// Matchups, sinergias y tendencia mensual (tolerantes a fallo: son
 	// informativas).
 	matchups, synergies := a.loadCrossStats(nameOf)
@@ -471,7 +595,7 @@ func (a *APIClient) LoadBuilds() ([]*model.ChampionBuilds, error) {
 			omitted++
 			continue // héroe sin asset público: sin nombre ni iconos, fuera
 		}
-		cb, err := a.loadHeroBuilds(hs, name, shop, abilityNames, patch)
+		cb, err := a.loadHeroBuilds(hs, name, shop, abilityNames, patch, heroByID[hs.HeroID], abilityByClass, itemsByClass)
 		if a.onProgress != nil {
 			a.onProgress(i+1, len(heroStats), name)
 		}
@@ -583,7 +707,7 @@ func (a *APIClient) loadCrossStats(nameOf map[int]string) (matchups, synergies m
 
 // loadHeroBuilds carga ítems y órdenes de habilidades de un héroe.
 // Devuelve nil si no hay muestra suficiente.
-func (a *APIClient) loadHeroBuilds(hs apiHeroStat, name string, shop map[int]apiItem, abilityNames map[int]string, patch string) (*model.ChampionBuilds, error) {
+func (a *APIClient) loadHeroBuilds(hs apiHeroStat, name string, shop map[int]apiItem, abilityNames map[int]string, patch string, hero apiHero, abilityByClass map[string]int, itemsByClass map[string]apiItem) (*model.ChampionBuilds, error) {
 	// Ítems comprados en partidas de este héroe.
 	var itemStats []apiItemStat
 	path := fmt.Sprintf("/v1/analytics/item-stats?hero_id=%d&min_matches=%d", hs.HeroID, minMatches)
@@ -625,9 +749,11 @@ func (a *APIClient) loadHeroBuilds(hs apiHeroStat, name string, shop map[int]api
 		})
 	}
 
-	// Habilidades: mapear ids reales → slots 1..N por uso total
-	// (slot 1 = la habilidad más jugada) y derivar topes por slot.
-	seqs, rules, legend, err := buildSkillSequences(abilStats, abilityNames)
+	// Habilidades: mapear ids reales → espacios canónicos (signature1..4,
+	// agrupando sub-habilidades de cambio de forma) y derivar topes por
+	// espacio. Sin mapeo completo se cae al orden por uso, declarado.
+	slots, primaries := abilitySlotMap(hero, abilityByClass, itemsByClass)
+	seqs, rules, legend, err := buildSkillSequences(abilStats, abilityNames, slots, primaries)
 	if err != nil {
 		return nil, fmt.Errorf("héroe %d: %w", hs.HeroID, err)
 	}
@@ -637,10 +763,99 @@ func (a *APIClient) loadHeroBuilds(hs apiHeroStat, name string, shop map[int]api
 	return cb, nil
 }
 
+// canonicalAbilityOrder devuelve los ids de habilidad del héroe en el
+// orden canónico del juego (signature1..4), resolviendo cada class_name
+// contra el catálogo de ítems. Devuelve nil si el dato no está
+// disponible: el llamador cae entonces al orden por uso.
+func canonicalAbilityOrder(hero apiHero, abilityByClass map[string]int) []int64 {
+	var out []int64
+	for i := 1; i <= 4; i++ {
+		class := hero.Items[fmt.Sprintf("signature%d", i)]
+		if class == "" {
+			return nil // kit incompleto: no se inventa un orden
+		}
+		id, ok := abilityByClass[class]
+		if !ok || id == 0 {
+			return nil
+		}
+		out = append(out, int64(id))
+	}
+	return out
+}
+
+// abilitySlotMap construye el mapa id de habilidad → espacio canónico
+// (1..4). Incluye las sub-habilidades: una habilidad que cambia de
+// forma (Silver) comparte espacio con su principal, así que sus eventos
+// de mejora se atribuyen a la misma tecla.
+//
+// La relación sale de los metadatos del juego (`dependent_abilities` +
+// flag DisplayAsSubAbility), nunca de similitud de nombres ni de la
+// frecuencia de uso.
+func abilitySlotMap(hero apiHero, abilityByClass map[string]int, itemsByClass map[string]apiItem) (map[int64]int, map[int]int64) {
+	out := map[int64]int{}
+	primaries := map[int]int64{}
+	for i := 1; i <= 4; i++ {
+		class := hero.Items[fmt.Sprintf("signature%d", i)]
+		id, ok := abilityByClass[class]
+		if !ok || id == 0 {
+			continue
+		}
+		out[int64(id)] = i
+		primaries[i] = int64(id)
+		// Sub-habilidades declaradas por el juego.
+		it, ok := itemsByClass[class]
+		if !ok {
+			continue
+		}
+		for subClass, dep := range it.DependentAbilities {
+			if !dep.IsSubAbility() {
+				continue
+			}
+			subID, ok := abilityByClass[subClass]
+			if !ok || subID == 0 {
+				continue
+			}
+			out[int64(subID)] = i
+		}
+	}
+	return out, primaries
+}
+
+// canonicalSlots coloca las habilidades observadas en el orden canónico
+// del héroe. Devuelve nil si el orden canónico no cubre exactamente el
+// conjunto observado (kit distinto, habilidad nueva o dato ausente): en
+// ese caso el llamador usa el orden por uso y no se inventa nada.
+func canonicalSlots(observed []int64, canonical []int64, use map[int64]int) []int64 {
+	if len(canonical) == 0 || len(canonical) != len(observed) {
+		return nil
+	}
+	seen := make(map[int64]bool, len(observed))
+	for _, id := range observed {
+		seen[id] = true
+	}
+	if len(seen) != len(observed) {
+		return nil // ids duplicados en la observación: dato raro
+	}
+	out := make([]int64, 0, len(canonical))
+	for _, id := range canonical {
+		if !seen[id] {
+			return nil // el canónico menciona algo que no se observó
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
 // buildSkillSequences convierte las secuencias de ids de habilidad al
-// alfabeto de slots, asigna slots por uso total descendente y deriva
-// los topes reales (máximo observado por slot).
-func buildSkillSequences(stats []apiAbilityStat, abilityNames map[int]string) ([]model.SkillSequenceStats, model.SkillRules, map[rune]string, error) {
+// alfabeto de slots y deriva los topes reales (máximo observado por
+// slot).
+//
+// El slot de cada habilidad sale del orden canónico del héroe cuando se
+// conoce (canonical); si no, se cae al orden por uso total descendente,
+// que es el comportamiento histórico. El orden canónico es el correcto
+// para la posición visual: en Solomon la habilidad más subida es la 3,
+// y ordenar por uso invertía los slots (1↔4, 2↔3).
+func buildSkillSequences(stats []apiAbilityStat, abilityNames map[int]string, slots map[int64]int, primaries map[int]int64) ([]model.SkillSequenceStats, model.SkillRules, map[rune]string, error) {
 	if len(stats) == 0 {
 		return nil, model.SkillRules{}, nil, fmt.Errorf("sin secuencias")
 	}
@@ -661,30 +876,67 @@ func buildSkillSequences(stats []apiAbilityStat, abilityNames map[int]string) ([
 	if len(ids) == 0 || len(ids) > 9 {
 		return nil, model.SkillRules{}, nil, fmt.Errorf("%d habilidades distintas (inesperado)", len(ids))
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		if use[ids[i]] != use[ids[j]] {
-			return use[ids[i]] > use[ids[j]] // más jugada primero
-		}
-		return ids[i] < ids[j] // desempate estable
-	})
+
+	// Camino canónico: todos los ids observados tienen espacio conocido
+	// por los metadatos del juego. Las sub-habilidades (cambio de forma)
+	// comparten espacio con su principal, así que no crean teclas
+	// ficticias.
 	slotOf := map[int64]rune{}
 	legend := map[rune]string{}
 	caps := map[rune]int{}
-	for i, id := range ids {
-		slot := rune('1' + i)
-		slotOf[id] = slot
-		if n, ok := abilityNames[int(id)]; ok {
-			legend[slot] = n
+	canonicalOrder := len(slots) > 0
+	var alphabet []rune
+	if canonicalOrder {
+		for _, id := range ids {
+			if _, ok := slots[id]; !ok {
+				canonicalOrder = false
+				break
+			}
 		}
-		caps[slot] = 0
 	}
+	if canonicalOrder {
+		// Nombres por espacio: manda la habilidad de la FIRMA canónica
+		// (primaries), no la sub-habilidad. La sub-habilidad es la
+		// forma transformada del mismo espacio y no debe robar el
+		// nombre de la tecla.
+		primary := primaries
+		for slot := 1; slot <= 4; slot++ {
+			r := rune('0' + slot)
+			alphabet = append(alphabet, r)
+			caps[r] = 0
+			if id, ok := primary[slot]; ok {
+				if n, ok := abilityNames[int(id)]; ok {
+					legend[r] = n
+				}
+			}
+		}
+		for id, slot := range slots {
+			slotOf[id] = rune('0' + slot)
+		}
+	} else {
+		// Fallback declarado: orden por uso. NO es el orden del juego.
+		sort.Slice(ids, func(i, j int) bool {
+			if use[ids[i]] != use[ids[j]] {
+				return use[ids[i]] > use[ids[j]] // más jugada primero
+			}
+			return ids[i] < ids[j] // desempate estable
+		})
+		for i, id := range ids {
+			slot := rune('1' + i)
+			slotOf[id] = slot
+			if n, ok := abilityNames[int(id)]; ok {
+				legend[slot] = n
+			}
+			caps[slot] = 0
+			alphabet = append(alphabet, slot)
+		}
+	}
+
 	rules := model.SkillRules{
-		Alphabet:  make([]rune, len(ids)),
-		Length:    length,
-		MaxPoints: caps,
-	}
-	for i := range ids {
-		rules.Alphabet[i] = rune('1' + i)
+		Alphabet:       alphabet,
+		Length:         length,
+		MaxPoints:      caps,
+		CanonicalOrder: canonicalOrder,
 	}
 
 	var seqs []model.SkillSequenceStats
@@ -707,7 +959,9 @@ func buildSkillSequences(stats []apiAbilityStat, abilityNames map[int]string) ([
 		if !ok {
 			continue
 		}
-		// Topes = máximo observado.
+		// Topes = máximo observado. Con sub-habilidades, dos ids
+		// distintos comparten espacio: el tope es el máximo del espacio,
+		// no la suma (no se cuenta dos veces el mismo evento).
 		for slot, n := range counts {
 			if n > rules.MaxPoints[slot] {
 				rules.MaxPoints[slot] = n
@@ -722,4 +976,34 @@ func buildSkillSequences(stats []apiAbilityStat, abilityNames map[int]string) ([
 		return nil, model.SkillRules{}, nil, fmt.Errorf("sin secuencias válidas")
 	}
 	return seqs, rules, legend, nil
+}
+
+// abilityItemsByClass devuelve class_name → ítem de habilidad completo,
+// con sus dependent_abilities. Se construye desde el catálogo completo
+// (no desde shop, que solo trae objetos comprables).
+func (a *APIClient) abilityItemsByClass() map[string]apiItem {
+	out := map[string]apiItem{}
+	for _, it := range a.allItems() {
+		if it.Type == "ability" && it.ClassName != "" {
+			out[it.ClassName] = it
+		}
+	}
+	return out
+}
+
+// allItems devuelve el catálogo completo de /v1/assets/items, memoizado
+// por cliente. Es la fuente de las habilidades y de sus relaciones
+// (dependent_abilities); shopItems solo conserva lo comprable.
+func (a *APIClient) allItems() []apiItem {
+	a.allItemsMu.Lock()
+	defer a.allItemsMu.Unlock()
+	if a.allItemsCache != nil {
+		return a.allItemsCache
+	}
+	var items []apiItem
+	if err := getJSON(a, "/v1/assets/items", "items.json", ttlAssets, &items); err != nil {
+		return nil
+	}
+	a.allItemsCache = items
+	return items
 }
