@@ -380,3 +380,89 @@ func TestCompatibleNombresEImagenes(t *testing.T) {
 		}
 	}
 }
+
+// TestManaYHealthRegenNoSonApoyo: los recursos y el sustain personal no
+// convierten un objeto en apoyo. Regresión: Eco de Luden aparecía en
+// APOYO porque el tag `Mana` se mapeaba a esa categoría.
+func TestManaYHealthRegenNoSonApoyo(t *testing.T) {
+	cat := fixtureItems(t)
+
+	// Objetos con maná o regeneración de vida y sin función de apoyo.
+	noApoyo := []string{
+		"Eco de Luden",              // Mana + AbilityHaste (mago)
+		"Manamune",                  // Mana (asesino/tirador)
+		"Malignidad",                // Mana (mago)
+		"Corazón de hielo",          // Mana + Armor (tanque)
+		"Bastón del arcángel",       // Mana (mago)
+		"Armadura de Warmog",        // HealthRegen (tanque)
+		"Rostro espiritual",         // HealthRegen (tanque)
+		"Corazón de acero",          // HealthRegen (tanque)
+		"Perla de rejuvenecimiento", // HealthRegen (componente)
+	}
+	for _, it := range cat {
+		has := false
+		for _, c := range Classify(it).Categories() {
+			if c == CatSupport {
+				has = true
+			}
+		}
+		for _, name := range noApoyo {
+			if it.Name == name && has {
+				t.Errorf("%q no debe clasificarse como apoyo: %v", name, Classify(it).Categories())
+			}
+		}
+	}
+
+	// Las recomendaciones genuinas de apoyo se conservan.
+	siApoyo := []string{
+		"Atlas mundial",       // GoldPer
+		"Tejesueños",          // GoldPer
+		"Ídolo prohibido",     // ManaRegen
+		"Incensario ardiente", // ManaRegen
+		"Redención",           // ManaRegen
+		"Bendición de Mikael", // ManaRegen
+	}
+	found := 0
+	for _, it := range cat {
+		for _, name := range siApoyo {
+			if it.Name != name {
+				continue
+			}
+			ok := false
+			for _, c := range Classify(it).Categories() {
+				if c == CatSupport {
+					ok = true
+				}
+			}
+			if !ok {
+				t.Errorf("%q debía seguir en apoyo: %v", name, Classify(it).Categories())
+			}
+			found++
+		}
+	}
+	if found != len(siApoyo) {
+		t.Errorf("solo %d/%d objetos de apoyo genuinos estaban en el catálogo", found, len(siApoyo))
+	}
+}
+
+// TestApoyoNoEsMayoriaDelCatalogo: si más de un tercio del catálogo es
+// "apoyo", el mapeo de tags está mal.
+func TestApoyoNoEsMayoriaDelCatalogo(t *testing.T) {
+	cat := fixtureItems(t)
+	support, total := 0, 0
+	for _, it := range cat {
+		total++
+		for _, c := range Classify(it).Categories() {
+			if c == CatSupport {
+				support++
+				break
+			}
+		}
+	}
+	if total == 0 {
+		t.Fatal("catálogo vacío")
+	}
+	if support*3 > total {
+		t.Errorf("%d/%d objetos clasificados como apoyo: demasiados", support, total)
+	}
+}

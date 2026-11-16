@@ -298,7 +298,9 @@ func (d detailView) alternativesViewB(plan *lolbuild.Plan) []string {
 		return out
 	}
 	out = append(out, stDim.Render(fmt.Sprintf(
-		"  %d candidatos con evidencia de uso · el delta de WR es descriptivo, no causal", len(alts))))
+		// La vista muestra WR ABSOLUTO de cada objeto, no la diferencia
+		// frente al campeón: el texto no puede prometer un delta.
+		"  %d candidatos con evidencia de uso · el WR es descriptivo, no causal", len(alts))))
 
 	// Primera categoría de cada objeto: donde se muestra completo.
 	primary := map[int]lolitems.Category{}

@@ -1012,7 +1012,9 @@ func TestKaisaAntesYDespuesDeMision(t *testing.T) {
 	if after.Complete {
 		t.Error("después no puede estar completo: falta evidencia del sexto principal")
 	}
-	if after.Reason == "" || !contains(after.Reason, "sexto") && !contains(after.Reason, "faltan") {
+	// Con un solo objeto ausente la concordancia es "falta 1 objeto".
+	if after.Reason == "" || (!contains(after.Reason, "falta 1 objeto") &&
+		!contains(after.Reason, "faltan") && !contains(after.Reason, "sexto")) {
 		t.Errorf("motivo = %q", after.Reason)
 	}
 	// Las botas siguen presentes, pero en la ranura de misión.

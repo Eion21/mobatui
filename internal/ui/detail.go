@@ -1008,11 +1008,16 @@ func (d detailView) headerView() string {
 		// desreferenciar nil.
 		metrics = stDim.Render("sin datos para los roles de este juego")
 	} else {
-		metrics = lipgloss.JoinHorizontal(lipgloss.Top,
-			stDim.Render("Patch "+b.Patch+" · "+nThousand(b.Total.Games)+" partidas · "),
-			wrStyle(b.WinRate, b.Total.Games).Render("WR "+pct(b.WinRate)),
-			stDim.Render("  ·  "), d.priorityLine(),
-		)
+		// El separador final solo se dibuja si hay prioridad de
+		// habilidades: sin ella quedaba un "·" colgando al final.
+		parts := []string{
+			stDim.Render("Patch " + b.Patch + " · " + nThousand(b.Total.Games) + " partidas · "),
+			wrStyle(b.WinRate, b.Total.Games).Render("WR " + pct(b.WinRate)),
+		}
+		if prio := d.priorityLine(); prio != "" {
+			parts = append(parts, stDim.Render("  ·  "), prio)
+		}
+		metrics = lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	}
 	// Las métricas envuelven por palabras para no desbordar en
 	// terminales estrechas. El retrato mini se come 15 columnas.
@@ -1164,21 +1169,40 @@ func (d detailView) tabView() string {
 	if d.CurrentBuild() == nil {
 		return stDim.Render("sin datos de build para este campeón en este juego")
 	}
-	switch label := d.tabs()[d.tab]; label {
-	case "Ítems":
+	// Despacho por índice canónico. Las etiquetas se abrevian para que
+	// siete pestañas quepan en 80 columnas (`Habil.`, `Match.`), así que
+	// comparar por texto dejaba las dos últimas cayendo en el caso por
+	// defecto y mostraban la misma vista.
+	//
+	// LoL:  0 Ítems · 1 Ruta · 2 Alt. · 3 Resumen · 4 Runas · 5 Habil. · 6 Match.
+	// DL:   0 Ítems · 1 Resumen · 2 Matchups · 3 Habilidades
+	if d.session.Game == model.GameDeadlock {
+		switch d.tab {
+		case 0:
+			return d.itemsView()
+		case 1:
+			return d.resumenView()
+		case 2:
+			return d.matchupsView()
+		default:
+			return d.skillsView()
+		}
+	}
+	switch d.tab {
+	case 0:
 		return d.itemsView()
-	case "Ruta":
+	case 1:
 		return d.routeTabView()
-	case "Alt.", "Alternativas":
+	case 2:
 		return d.alternativesTabView()
-	case "Resumen":
+	case 3:
 		return d.resumenView()
-	case "Matchups":
-		return d.matchupsView()
-	case "Runas":
+	case 4:
 		return d.runesView()
-	default:
+	case 5:
 		return d.skillsView()
+	default:
+		return d.matchupsView()
 	}
 }
 
@@ -2017,7 +2041,10 @@ const minMatchupGames = 200
 func (d detailView) matchupsView() string {
 	b := d.CurrentBuild()
 	if len(b.Matchups) == 0 && len(b.Synergies) == 0 {
-		return stDim.Render("sin datos de matchups para este héroe (la fuente no los trae)")
+		if d.session.Game == model.GameDeadlock {
+			return stDim.Render("la fuente no publica enfrentamientos para este héroe")
+		}
+		return stDim.Render("la fuente no publica enfrentamientos por campeón en este rol")
 	}
 	nameOf := d.session.Names.HeroNameByID
 	usable := func(refs []model.HeroRef) []model.HeroRef {
@@ -2119,6 +2146,26 @@ func (d detailView) runesView() string {
 	return out
 }
 
+// emptySkillsReason distingue POR QUÉ no hay rejilla de habilidades:
+// la fuente no publica órdenes, la muestra no llega al umbral, o los
+// datos existen pero la secuencia no es válida con las reglas del juego
+// (y por eso no se puede derivar la prioridad). Un mensaje único
+// "sin muestra suficiente" ocultaba casos muy distintos.
+func (d detailView) emptySkillsReason(b *model.CleanBuild) string {
+	if b == nil {
+		return "sin datos de build"
+	}
+	// ¿La fuente trajo algo? El planificador recibe la lista cruda, así
+	// que una build sin secuencia y sin prioridad viene de un descarte.
+	if b.SkillOrder.Sequence == "" && len(b.SkillOrder.Priority) == 0 {
+		if d.session.Game == model.GameDeadlock {
+			return "la fuente no publica órdenes de habilidades para este héroe"
+		}
+		return "la fuente no publica una secuencia de habilidades válida para este campeón"
+	}
+	return "sin secuencia con muestra suficiente"
+}
+
 // ─── pestaña habilidades ───────────────────────────────────────────
 
 // skillsView: rejilla habilidad × nivel con marcas ◆, prioridad y
@@ -2127,7 +2174,7 @@ func (d detailView) skillsView() string {
 	b := d.CurrentBuild()
 	seq := []rune(b.SkillOrder.Sequence)
 	if len(seq) == 0 {
-		return stDim.Render("sin secuencia con muestra suficiente")
+		return stDim.Render(d.emptySkillsReason(b))
 	}
 	seqWR := b.SkillOrder.WinRate()
 	head := lipgloss.JoinHorizontal(lipgloss.Top,

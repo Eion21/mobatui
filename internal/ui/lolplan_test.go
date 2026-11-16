@@ -113,7 +113,8 @@ func TestRutaIncompletaSeDeclara(t *testing.T) {
 	if !strings.Contains(view, "inventario incompleto") {
 		t.Errorf("debía declararse incompleto:\n%s", view)
 	}
-	if !strings.Contains(view, "faltan") {
+	// Concordancia correcta con un solo objeto ausente.
+	if !strings.Contains(view, "falta 1 objeto") {
 		t.Errorf("debía explicar cuántos faltan:\n%s", view)
 	}
 	if strings.Contains(view, "inventario completo") {
@@ -613,5 +614,183 @@ func TestStatsFingerprint(t *testing.T) {
 	}
 	if statsFingerprint(nil) != 0 {
 		t.Error("nil debe dar huella 0")
+	}
+}
+
+// ─── despacho de pestañas ──────────────────────────────────────────
+
+// TestCadaPestanaTieneSuVista: las siete pestañas de LoL despachan a
+// vistas distintas. Regresión: al abreviar `Matchups` a `Match.` el
+// switch por etiqueta dejaba las dos últimas en el caso por defecto y
+// ambas mostraban la rejilla de habilidades.
+func TestCadaPestanaTieneSuVista(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 60)
+	if len(d.tabs()) != 7 {
+		t.Fatalf("pestañas = %v", d.tabs())
+	}
+	// Firma de cada vista: un texto que solo aparece en ella.
+	firma := []string{
+		"ORDEN DE COMPRA",          // Ítems
+		"RUTA SUGERIDA",            // Ruta
+		"ALTERNATIVAS POR FUNCIÓN", // Alt.
+		"ORDEN DE COMPRA",          // Resumen (comparte resumen jugable)
+		"runas",                    // Runas
+		"",                         // Habil. (vacío en el fixture: se comprueba aparte)
+		"",                         // Match. (idem)
+	}
+	for i := range d.tabs() {
+		d2 := gotoTab(d, string(rune('1'+i)))
+		if got := d2.tabs()[d2.tab]; got != d.tabs()[i] {
+			t.Errorf("tecla %d llevó a %q", i+1, got)
+		}
+		if firma[i] == "" {
+			continue
+		}
+		if v := d2.tabView(); !strings.Contains(v, firma[i]) {
+			t.Errorf("pestaña %q no muestra su vista (falta %q)", d.tabs()[i], firma[i])
+		}
+	}
+
+	// Habilidades y Matchups NO comparten vista: una pide una secuencia
+	// y la otra enfrentamientos.
+	hab := gotoTab(d, "6").tabView()
+	mat := gotoTab(d, "7").tabView()
+	if hab == mat {
+		t.Error("Habilidades y Matchups muestran lo mismo")
+	}
+	if !strings.Contains(hab, "secuencia") {
+		t.Errorf("la pestaña de habilidades no habla de secuencia: %q", hab)
+	}
+	if !strings.Contains(mat, "enfrentamientos") {
+		t.Errorf("la pestaña de matchups no habla de enfrentamientos: %q", mat)
+	}
+}
+
+// TestMensajesVaciosDistintos: el texto de cada pestaña vacía es
+// específico, no un genérico "sin muestra suficiente".
+func TestMensajesVaciosDistintos(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 60)
+	hab := gotoTab(d, "6").tabView()
+	if strings.Contains(hab, "sin secuencia con muestra suficiente") {
+		t.Errorf("habilidades usa el mensaje genérico: %q", hab)
+	}
+	mat := gotoTab(d, "7").tabView()
+	if strings.Contains(mat, "sin datos de matchups para este héroe") {
+		t.Errorf("matchups en LoL habla de 'héroe': %q", mat)
+	}
+	// Deadlock conserva su vocabulario.
+	s := loadOffline(t, model.GameDeadlock)
+	abrams := findChampion(t, s, "Abrams")
+	dd := newDetailView(abrams, s)
+	dd.width, dd.height = 118, 40
+	dd.sync()
+	if v := gotoTab(dd, "3").tabView(); !strings.Contains(v, "héroe") {
+		t.Errorf("Deadlock debe decir 'héroe': %q", v)
+	}
+}
+
+// TestCabeceraSinSeparadorColgando: sin prioridad de habilidades no
+// queda un "·" suelto al final de las métricas.
+func TestCabeceraSinSeparadorColgando(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 60)
+	head := stripANSIStr(d.headerBlock())
+	for _, line := range strings.Split(head, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasSuffix(trimmed, "·") || strings.HasSuffix(trimmed, "· ") {
+			t.Errorf("separador colgando en la cabecera: %q", trimmed)
+		}
+	}
+}
+
+// TestTextosDeAlt: el resumen no promete un delta que no se muestra.
+func TestTextosDeAlt(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 70)
+	view := gotoTab(d, "3").tabView()
+	if strings.Contains(view, "delta") {
+		t.Error("Alt. no muestra el delta de WR: no debe mencionarlo")
+	}
+	if !strings.Contains(view, "no causal") {
+		t.Error("debe conservar la advertencia de que el WR no es causal")
+	}
+}
+
+// TestConcordanciaSingularPlural: "falta 1 objeto" vs "faltan N".
+func TestConcordanciaSingularPlural(t *testing.T) {
+	// Kai'Sa con la misión completada tiene 6 principales pero solo 5
+	// candidatos: falta exactamente 1.
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 60)
+	d.session.botMissionDone = true
+	plan := d.lolPlan()
+	if plan.Complete {
+		t.Skip("el fixture tiene seis principales")
+	}
+	if !strings.Contains(plan.Reason, "falta 1 objeto") {
+		t.Errorf("con un objeto ausente: %q", plan.Reason)
+	}
+	if strings.Contains(plan.Reason, "faltan 1") {
+		t.Errorf("concordancia incorrecta: %q", plan.Reason)
+	}
+	// Y en pantalla se lee igual.
+	if v := d.routeTabView(); !strings.Contains(v, "falta 1 objeto") {
+		t.Errorf("la vista no refleja la concordancia: %q", v)
+	}
+}
+
+// TestApoyoNoIncluyeLuden: regresión del sesgo de clasificación.
+func TestApoyoNoIncluyeLuden(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 70)
+	view := gotoTab(d, "3").tabView()
+	if strings.Contains(view, "APOYO") {
+		// Si hay sección de apoyo, Eco de Luden no puede estar dentro.
+		idx := strings.Index(view, "APOYO")
+		if rest := view[idx:]; strings.Contains(rest, "Eco de Luden") {
+			t.Error("Eco de Luden aparece bajo APOYO")
+		}
+	}
+}
+
+// TestAyudaDePestanasPorJuego: LoL anuncia 1-7 y Deadlock 1-4; antes
+// ambos decían "1-3" con siete pestañas disponibles.
+func TestAyudaDePestanasPorJuego(t *testing.T) {
+	casos := []struct {
+		game  model.Game
+		champ string
+		want  string
+		avoid string
+	}{
+		{model.GameLoL, "Ahri", "tab/1-7", "tab/1-3"},
+		{model.GameDeadlock, "Abrams", "tab/1-4", "tab/1-7"},
+	}
+	for _, c := range casos {
+		s := loadOffline(t, c.game)
+		ch := findChampion(t, s, c.champ)
+		a := NewApp(Loader{})
+		a.screen = screenDetail
+		a.detail = newDetailView(ch, s)
+		footer := stripANSIStr(a.footer())
+		if !strings.Contains(footer, c.want) {
+			t.Errorf("%s: la ayuda no dice %q: %s", c.game, c.want, footer)
+		}
+		if strings.Contains(footer, c.avoid) {
+			t.Errorf("%s: la ayuda no debe decir %q: %s", c.game, c.avoid, footer)
+		}
+	}
+}
+
+// TestAyudaDeMisionSoloEnBot: la tecla M aparece en la ayuda solo donde
+// tiene efecto.
+func TestAyudaDeMisionSoloEnBot(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 60)
+	a := NewApp(Loader{})
+	a.screen = screenDetail
+	a.detail = d
+	if f := stripANSIStr(a.footer()); !strings.Contains(f, "misión") {
+		t.Errorf("BOT debe anunciar la tecla de misión: %s", f)
+	}
+	// Un rol sin ranura de botas no la anuncia.
+	d2 := planDetailView(t, "ahri", "Ahri", 118, 60)
+	a.detail = d2
+	if f := stripANSIStr(a.footer()); strings.Contains(f, "misión") {
+		t.Errorf("MID no debe anunciar la tecla de misión: %s", f)
 	}
 }

@@ -563,11 +563,19 @@ func NewApp(loader Loader) App {
 // ─── atajos y ayuda ────────────────────────────────────────────────
 
 var (
-	keyOpen    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "abrir"))
-	keyDetail  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "detalle"))
-	keyNav     = key.NewBinding(key.WithKeys("up", "down", "left", "right", "k", "j", "h", "l"), key.WithHelp("←↑↓→ hjkl", "tarjeta"))
-	keyFilter  = key.NewBinding(key.WithKeys("/"), key.WithHelp("escribe", "filtrar"))
-	keyTab     = key.NewBinding(key.WithKeys("tab", "1", "2", "3"), key.WithHelp("tab/1-3", "pestaña"))
+	keyOpen   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "abrir"))
+	keyDetail = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "detalle"))
+	keyNav    = key.NewBinding(key.WithKeys("up", "down", "left", "right", "k", "j", "h", "l"), key.WithHelp("←↑↓→ hjkl", "tarjeta"))
+	keyFilter = key.NewBinding(key.WithKeys("/"), key.WithHelp("escribe", "filtrar"))
+	// Siete pestañas en LoL (cuatro en Deadlock): la ayuda ya no puede
+	// decir "1-3". El binding base cubre las cuatro de Deadlock; LoL usa
+	// keyTabLol para anunciar el rango correcto.
+	keyTab = key.NewBinding(
+		key.WithKeys("tab", "1", "2", "3", "4"),
+		key.WithHelp("tab/1-4", "pestaña"))
+	keyTabLol = key.NewBinding(
+		key.WithKeys("tab", "1", "2", "3", "4", "5", "6", "7"),
+		key.WithHelp("tab/1-7", "pestaña"))
 	keyRole    = key.NewBinding(key.WithKeys("r", "R", "[", "]"), key.WithHelp("r/R", "rol"))
 	keyArt     = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "retrato"))
 	keyHelp    = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "ayuda"))
@@ -579,6 +587,8 @@ var (
 	keySort    = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "orden"))
 	keyPick    = key.NewBinding(key.WithKeys("left", "right", "up", "down"), key.WithHelp("←→", "elegir"))
 	keyListNav = key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "navegar"))
+	// M conmuta el inventario de BOTTOM antes/después de la misión.
+	keyMission = key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "misión"))
 )
 
 // shortHelp devuelve los atajos útiles según pantalla y pestaña: nada
@@ -590,7 +600,17 @@ func (a App) shortHelp() []key.Binding {
 	case screenList:
 		return []key.Binding{keyListNav, keyDetail, keyFilter, keyMonitor, keySort, keyGame, keyHelp, keyQuit}
 	case screenDetail:
-		base := []key.Binding{keyTab, keyRole, keyHelp, keyBack}
+		tabKey := keyTab
+		if a.detail.session != nil && a.detail.session.Game == model.GameLoL {
+			tabKey = keyTabLol
+		}
+		base := []key.Binding{tabKey, keyRole, keyHelp, keyBack}
+		// La tecla de misión solo tiene efecto en BOTTOM de LoL.
+		if a.detail.session != nil && a.detail.session.Game == model.GameLoL {
+			if cb := a.detail.CurrentBuild(); cb != nil && cb.Role == model.RoleBottom {
+				base = []key.Binding{keyTab, keyMission, keyRole, keyHelp, keyBack}
+			}
+		}
 		if a.detail.tab == 0 {
 			return append([]key.Binding{keyNav, keyDetail}, base...)
 		}

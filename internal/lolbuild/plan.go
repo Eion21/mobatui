@@ -636,10 +636,19 @@ func completeness(p Plan) (bool, string) {
 		return true, ""
 	}
 	faltan := need - have
+	// Concordancia: "falta 1 objeto" / "faltan N objetos".
+	verbo, plural := "faltan", "objetos"
+	if faltan == 1 {
+		verbo, plural = "falta", "objeto"
+	}
+	espacios := "espacios"
+	if need == 1 {
+		espacios = "espacio"
+	}
 	return false, fmt.Sprintf(
-		"faltan %d objetos para completar %d espacios principales: "+
+		"%s %d %s para completar %d %s principales: "+
 			"la fuente no ofrece candidatos con muestra suficiente; no se rellena el hueco",
-		faltan, need)
+		verbo, faltan, plural, need, espacios)
 }
 
 // inventoryFor devuelve la restricción de espacios según el rol y el

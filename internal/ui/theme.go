@@ -18,11 +18,16 @@ var (
 	// colGoldDim marca la pareja de cadena de la tarjeta seleccionada:
 	// visible como relación, sin competir con el foco.
 	colGoldDim = lipgloss.Color("#4a3b20")
-	colDim     = lipgloss.Color("#5B5A56")
-	colRed     = lipgloss.Color("#E84057")
-	colGreen   = lipgloss.Color("#3FB68B")
-	colPurple  = lipgloss.Color("#B689F0")
-	colBlue    = lipgloss.Color("#5B8DEF")
+	// colDim pinta estadísticas secundarias, explicaciones y ayudas. El
+	// valor anterior (#5B5A56) daba 2.66:1 contra el fondo del panel,
+	// muy por debajo del mínimo legible (4.5:1): en la revisión visual
+	// esas líneas casi no se leían. #8A8982 mantiene el tono neutro
+	// cálido y sube a 5.23:1.
+	colDim    = lipgloss.Color("#8A8982")
+	colRed    = lipgloss.Color("#E84057")
+	colGreen  = lipgloss.Color("#3FB68B")
+	colPurple = lipgloss.Color("#B689F0")
+	colBlue   = lipgloss.Color("#5B8DEF")
 )
 
 // Estilos compartidos.

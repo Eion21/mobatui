@@ -331,7 +331,7 @@ func TestDetailViewRenderDeadlock(t *testing.T) {
 	}
 	// Pestaña matchups con fixtures: sin datos, estado vacío claro.
 	m, _ := d.Update(keyMsg("3"))
-	if v := m.View(); !strings.Contains(v, "sin datos de matchups") {
+	if v := m.View(); !strings.Contains(v, "no publica enfrentamientos") {
 		t.Error("la pestaña matchups no mostró estado vacío con fixtures")
 	}
 	// Pestaña habilidades: rejilla con los slots del héroe.

@@ -165,10 +165,16 @@ var tagCategorias = map[string]Category{
 	"Active":            CatUtility,
 	"Vision":            CatUtility,
 	"Slow":              CatUtility,
-	"GoldPer":           CatSupport,
-	"ManaRegen":         CatSupport,
-	"HealthRegen":       CatSupport,
-	"Mana":              CatSupport,
+	// Apoyo: solo lo que de verdad cumple función de soporte.
+	// `GoldPer` (oro pasivo: Atlas mundial, Tejesueños) y `ManaRegen`
+	// (regeneración de maná: Idolo prohibido, Incensario) identifican
+	// objetos de apoyo.
+	"GoldPer":   CatSupport,
+	"ManaRegen": CatSupport,
+	// `Mana` y `HealthRegen` NO implican apoyo: son recursos y sustain
+	// personal. Mapearlos a apoyo metía en esa categoría a Eco de Luden,
+	// Manamune, Malignidad, Warmog o Rostro espiritual, que no tienen
+	// función de soporte. Se clasifican por sus otras etiquetas.
 }
 
 // Classify clasifica un objeto combinando tags declarados y reglas
