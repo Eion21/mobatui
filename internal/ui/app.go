@@ -23,6 +23,8 @@ import (
 	"github.com/Eion21/mobatui/internal/deadlock"
 	"github.com/Eion21/mobatui/internal/game"
 	"github.com/Eion21/mobatui/internal/imgrender"
+	"github.com/Eion21/mobatui/internal/lolbuild"
+	"github.com/Eion21/mobatui/internal/lolitems"
 	"github.com/Eion21/mobatui/internal/model"
 	"github.com/Eion21/mobatui/internal/procmon"
 	"github.com/Eion21/mobatui/internal/staticdata"
@@ -143,6 +145,16 @@ type Session struct {
 	// Omitted son los héroes/campeones descartados por datos
 	// corruptos o sin asset: se muestran en la barra de estado.
 	Omitted int
+	// ItemCatalog es el catálogo de objetos de LoL con metadatos
+	// (Data Dragon). nil = no disponible (Deadlock o sin datos).
+	ItemCatalog map[int]lolitems.Item
+	// botMissionDone recuerda si el usuario consultó el inventario de
+	// BOT como "después de misión". Es una PREFERENCIA DE VISTA: nunca
+	// se deduce el estado real de la partida.
+	botMissionDone bool
+	// lolPlans cachea los planes ya calculados por (campeón, rol,
+	// parche, misión) para no recalcular en cada frame.
+	lolPlans map[lolPlanKey]*lolbuild.Plan
 }
 
 // renderItemArt pre-renderiza el icono de un ítem si no existe.
@@ -300,6 +312,16 @@ func LoadSession(g model.Game, l Loader) (*Session, error) {
 		// fuente los trae.
 		if dp, ok := p.(staticdata.ItemDetailsProvider); ok {
 			s.ItemMeta, _ = dp.ItemDetails()
+		}
+		// Catálogo de objetos con metadatos (LoL): alimenta el
+		// planificador de rutas. Reutiliza la MISMA caché de Data
+		// Dragon que Items(), así que no añade peticiones.
+		if ic, ok := p.(interface {
+			ItemCatalog() (map[int]lolitems.Item, error)
+		}); ok {
+			if cat, err := ic.ItemCatalog(); err == nil && len(cat) > 0 {
+				s.ItemCatalog = cat
+			}
 		}
 		// Origen de los datos, para no servir datos viejos en silencio.
 		if fp, ok := p.(staticdata.FreshnessProvider); ok {

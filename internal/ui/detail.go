@@ -14,6 +14,7 @@ import (
 
 	"github.com/Eion21/mobatui/internal/clean"
 	"github.com/Eion21/mobatui/internal/config"
+	"github.com/Eion21/mobatui/internal/lolbuild"
 	"github.com/Eion21/mobatui/internal/model"
 )
 
@@ -98,7 +99,25 @@ func (d detailView) tabs() []string {
 	if d.session.Game == model.GameDeadlock {
 		return []string{"Ítems", "Resumen", "Matchups", "Habilidades"}
 	}
-	return []string{"Ítems", "Resumen", "Runas", "Habilidades", "Matchups"}
+	// Nombres cortos: siete pestañas deben caber en 80 columnas junto
+	// con su número. El nombre largo va en el contenido de la vista.
+	return []string{"Ítems", "Ruta", "Alt.", "Resumen", "Runas", "Habil.", "Match."}
+}
+
+// lolPlan devuelve el plan de build del campeón/rol actual, o nil si no
+// hay datos para construirlo. El cálculo está cacheado en la sesión por
+// (campeón, rol, parche, misión), así que llamarlo desde el render no
+// recalcula nada.
+func (d detailView) lolPlan() *lolbuild.Plan {
+	if d.session == nil || d.session.Game != model.GameLoL || d.champ == nil {
+		return nil
+	}
+	cb := d.CurrentBuild()
+	if cb == nil {
+		return nil
+	}
+	mission := d.session.MissionStateFor(cb.Role)
+	return d.session.LolPlan(cb, d.champ.Key, cb.Role, mission)
 }
 
 // cardW leaves enough space for readable Deadlock names and purchase cues.
@@ -233,12 +252,25 @@ func (d detailView) Update(msg tea.Msg) (detailView, tea.Cmd) {
 		d.tab = (d.tab - 1 + len(tabs)) % len(tabs)
 		d.clampSel()
 		d.vp.GotoTop()
-	case "1", "2", "3", "4", "5":
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if idx := int(km.String()[0] - '1'); idx < len(tabs) {
 			d.tab = idx
 			d.clampSel()
 			d.vp.GotoTop()
 		}
+	case "M":
+		// Estado de misión de BOT (antes/después). Es una preferencia
+		// de VISTA: no se deduce el estado real de la partida. Solo
+		// aplica donde la misión cambia el inventario (BOT).
+		cb := d.CurrentBuild()
+		if cb == nil || !d.session.ToggleBotMission(cb.Role) {
+			break
+		}
+		d.sync()
+		if d.session.botMissionDone {
+			return d, toastCmd("BOT: después de la misión")
+		}
+		return d, toastCmd("BOT: antes de la misión")
 	case "a":
 		d.artMode = (d.artMode + 1) % 3
 		d.sync()
@@ -1100,7 +1132,19 @@ func (d detailView) tabsView() string {
 			}
 		}
 	}
-	parts := make([]string, 0, 5)
+	// Última reserva para terminales muy estrechas: si aun abreviado no
+	// cabe, se muestra solo la pestaña activa con su posición. Nunca se
+	// desborda el ancho (la TUI debe funcionar en terminales pequeñas).
+	barWidth := 0
+	for i, name := range names {
+		barWidth += len([]rune(fmt.Sprintf("%d %s", i+1, name)))
+	}
+	barWidth += (len(names) - 1) * len([]rune(sep))
+	if barWidth+2 > d.width-4 {
+		label := fmt.Sprintf("%d/%d %s", d.tab+1, len(names), shortTabName(names[d.tab]))
+		return lipgloss.NewStyle().Padding(0, 1).Render(tabOn.Render(label))
+	}
+	parts := make([]string, 0, len(names))
 	for i, name := range names {
 		label := fmt.Sprintf("%d %s", i+1, name)
 		var rendered string
@@ -1123,6 +1167,10 @@ func (d detailView) tabView() string {
 	switch label := d.tabs()[d.tab]; label {
 	case "Ítems":
 		return d.itemsView()
+	case "Ruta":
+		return d.routeTabView()
+	case "Alt.", "Alternativas":
+		return d.alternativesTabView()
 	case "Resumen":
 		return d.resumenView()
 	case "Matchups":
@@ -2392,4 +2440,57 @@ func joinWithGap(parts []string, gap string) []string {
 		out = append(out, p)
 	}
 	return out
+}
+
+// ─── pestaña Ruta (LoL) ────────────────────────────────────────────
+
+// routeTabView: ruta sugerida + inventario final. Es una vista de
+// lectura: no añade tarjetas navegables para no complicar la selección.
+func (d detailView) routeTabView() string {
+	plan := d.lolPlan()
+	if plan == nil {
+		return stDim.Render("sin datos suficientes para construir la ruta de compra")
+	}
+	lines := d.routeViewA(plan)
+	if m := d.missionHint(); m != "" {
+		lines = append(lines, "", stDim.Render("  "+m))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, d.wrapLines(lines)...)
+}
+
+// alternativesTabView: alternativas agrupadas por función.
+func (d detailView) alternativesTabView() string {
+	plan := d.lolPlan()
+	if plan == nil {
+		return stDim.Render("sin datos suficientes para proponer alternativas")
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, d.wrapLines(d.alternativesViewB(plan))...)
+}
+
+// missionHint explica cómo cambiar el estado de misión cuando aplica.
+func (d detailView) missionHint() string {
+	cb := d.CurrentBuild()
+	if cb == nil || cb.Role != model.RoleBottom {
+		return ""
+	}
+	if d.session.botMissionDone {
+		return "mostrando BOT después de la misión · M vuelve a antes de misión"
+	}
+	return "mostrando BOT antes de la misión · M simula después de la misión"
+}
+
+// shortTabName abrevia el nombre de una pestaña para barras estrechas.
+func shortTabName(name string) string {
+	switch name {
+	case "Resumen":
+		return "Resum."
+	case "Habilidades":
+		return "Habil."
+	case "Matchups":
+		return "Match."
+	case "Alternativas":
+		return "Alt."
+	default:
+		return name
+	}
 }

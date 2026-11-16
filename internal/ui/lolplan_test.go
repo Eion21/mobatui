@@ -1,0 +1,617 @@
+package ui
+
+// Pruebas de las dos vistas nuevas de LoL (Ruta y Alternativas) y del
+// estado de misión. Usan fixtures versionados: sin red ni caché.
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Eion21/mobatui/internal/lolbuild"
+	"github.com/Eion21/mobatui/internal/lolitems"
+	"github.com/Eion21/mobatui/internal/model"
+)
+
+// ─── Vista A: ruta ─────────────────────────────────────────────────
+
+// TestRutaMuestraOrdenDeCompras: los pasos salen en orden y con su
+// minuto cuando existe.
+func TestRutaMuestraOrdenDeCompras(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 60)
+	view := gotoTab(d, "2").tabView()
+
+	for _, want := range []string{
+		"RUTA SUGERIDA", "basada en compras observadas",
+		"Verdugo de krakens", "Hoja de furia de Guinsoo", "El final",
+		"INVENTARIO FINAL",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("la ruta no muestra %q", want)
+		}
+	}
+	// Los pasos aparecen en orden: la posición del 1º < la del 5º.
+	first := strings.Index(view, "Verdugo de krakens")
+	last := strings.Index(view, "Sombrero mortal de Rabadon")
+	if first < 0 || last < 0 || first > last {
+		t.Errorf("los pasos no están en orden (1º=%d, 5º=%d)", first, last)
+	}
+	// Con minuto medio disponible, se muestra.
+	if !strings.Contains(view, "min") {
+		t.Error("faltan los minutos medios de compra")
+	}
+}
+
+// TestRutaEtiquetaEvidencia: la ruta se rotula como construcción
+// estadística, nunca como secuencia observada.
+func TestRutaEtiquetaEvidencia(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 60)
+	view := gotoTab(d, "2").tabView()
+
+	if strings.Contains(view, "secuencia observada") {
+		t.Error("no debe rotularse como secuencia observada")
+	}
+	if !strings.Contains(view, "compra N más frecuente") &&
+		!strings.Contains(view, "no es la secuencia") {
+		t.Error("debe advertir que es una composición estadística")
+	}
+}
+
+// TestRutaInventarioPorRol comprueba las restricciones de espacios.
+func TestRutaInventarioPorRol(t *testing.T) {
+	casos := []struct {
+		key, name, role string
+		mission         lolbuild.InventoryState
+		wantSlots       string
+	}{
+		{"kaisa", "Kai'Sa", "BOTTOM", lolbuild.MissionPending, "5 principales + botas"},
+		{"ahri", "Ahri", "MIDDLE", lolbuild.MissionUnknown, "5 principales + botas"},
+		{"malphite", "Malphite", "TOP", lolbuild.MissionUnknown, "5 principales + botas"},
+		{"soraka", "Soraka", "SUPPORT", lolbuild.MissionUnknown, "5 principales + botas + ranura de misión"},
+	}
+	for _, c := range casos {
+		t.Run(c.name, func(t *testing.T) {
+			d := planDetailView(t, c.key, c.name, 120, 60)
+			view := gotoTab(d, "2").tabView()
+			if !strings.Contains(view, c.wantSlots) {
+				t.Errorf("no muestra %q:\n%s", c.wantSlots, view)
+			}
+		})
+	}
+}
+
+// TestRutaNoMuestraMinutoCero: los objetos de misión no se pintan como
+// compra al minuto 0.
+func TestRutaNoMuestraMinutoCero(t *testing.T) {
+	d := planDetailView(t, "soraka", "Soraka", 120, 60)
+	view := gotoTab(d, "2").tabView()
+
+	// "~0 min" sería un minuto inventado; "37 min" es dato real.
+	if strings.Contains(view, "~0 min") {
+		t.Errorf("la vista muestra un minuto 0 inventado:\n%s", view)
+	}
+	// Y el paso de misión no lleva marca de minutos.
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Tejesueños") && strings.Contains(line, "min") {
+			t.Errorf("el objeto de misión muestra un minuto: %q", line)
+		}
+	}
+	// El objeto de misión se identifica como tal.
+	if !strings.Contains(view, "por misión") {
+		t.Errorf("el objeto de misión no se identifica:\n%s", view)
+	}
+}
+
+// TestRutaIncompletaSeDeclara: un plan sin sexto objeto no se presenta
+// como completo.
+func TestRutaIncompletaSeDeclara(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 60)
+	// Simular "después de misión": 6 principales pero solo 5 con
+	// evidencia → incompleto declarado.
+	d.session.botMissionDone = true
+	view := d.routeTabView()
+
+	if !strings.Contains(view, "inventario incompleto") {
+		t.Errorf("debía declararse incompleto:\n%s", view)
+	}
+	if !strings.Contains(view, "faltan") {
+		t.Errorf("debía explicar cuántos faltan:\n%s", view)
+	}
+	if strings.Contains(view, "inventario completo") {
+		t.Error("no puede decir 'completo' si falta un objeto")
+	}
+}
+
+// ─── Vista B: alternativas ─────────────────────────────────────────
+
+// TestAlternativasAgrupadas: las categorías se muestran con nombres
+// legibles y cada grupo trae sus objetos.
+func TestAlternativasAgrupadas(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 70)
+	view := gotoTab(d, "3").tabView()
+
+	if !strings.Contains(view, "ALTERNATIVAS POR FUNCIÓN") {
+		t.Fatal("falta el título de la vista")
+	}
+	// Al menos daño físico y daño mágico aparecen.
+	for _, want := range []string{"DAÑO FÍSICO", "DAÑO MÁGICO"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("falta la categoría %q", want)
+		}
+	}
+	// Cada alternativa lleva sus datos reales.
+	for _, want := range []string{"partidas", "pick", "WR"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("las alternativas no muestran %q", want)
+		}
+	}
+}
+
+// TestAlternativasLimiteAmpliado: hasta 12 candidatos distintos.
+func TestAlternativasLimiteAmpliado(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 70)
+	plan := d.lolPlan()
+	if plan == nil {
+		t.Fatal("sin plan")
+	}
+	alts := plan.AlternativeItems()
+	if len(alts) > maxAlternativesShown {
+		t.Errorf("%d alternativas: el máximo es %d", len(alts), maxAlternativesShown)
+	}
+	if len(alts) < 5 {
+		t.Errorf("solo %d alternativas: la vista sería inútil", len(alts))
+	}
+	// Sin duplicados.
+	seen := map[int]bool{}
+	for _, a := range alts {
+		if seen[a.Item] {
+			t.Errorf("alternativa duplicada: %d", a.Item)
+		}
+		seen[a.Item] = true
+	}
+}
+
+// TestAlternativasSinRepetirVisualmente: un objeto en varias categorías
+// se muestra completo una vez y como referencia después.
+func TestAlternativasSinRepetirVisualmente(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 70)
+	plan := d.lolPlan()
+	view := gotoTab(d, "3").tabView()
+
+	// Contar cuántas veces aparece completo cada nombre de alternativa.
+	for _, a := range plan.AlternativeItems() {
+		// Línea completa = nombre + " · " + partidas.
+		full := strings.Count(view, a.Name+" · ")
+		if full > 1 {
+			t.Errorf("%q se muestra completo %d veces (debe ser 1)", a.Name, full)
+		}
+	}
+	// Y las referencias compactas existen si hay objetos multicategoría.
+	multi := 0
+	for _, g := range plan.Alternatives {
+		if len(g.Items) > 0 {
+			multi++
+		}
+	}
+	if multi > len(plan.AlternativeItems()) {
+		if !strings.Contains(view, "ya listado") {
+			t.Error("faltan las referencias compactas para objetos repetidos")
+		}
+	}
+}
+
+// TestAlternativasExcluyeEquipados: nada del inventario aparece como
+// alternativa.
+func TestAlternativasExcluyeEquipados(t *testing.T) {
+	for _, c := range []struct{ key, name string }{
+		{"kaisa", "Kai'Sa"}, {"ahri", "Ahri"},
+		{"malphite", "Malphite"}, {"soraka", "Soraka"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := planDetailView(t, c.key, c.name, 120, 70)
+			plan := d.lolPlan()
+			equipped := map[int]bool{}
+			for _, id := range plan.Final {
+				equipped[id] = true
+			}
+			for _, a := range plan.AlternativeItems() {
+				if equipped[a.Item] {
+					t.Errorf("%s está equipado y también como alternativa", a.Name)
+				}
+			}
+		})
+	}
+}
+
+// TestAlternativasCategoriasValidas: cada grupo solo contiene objetos de
+// su categoría y usa etiquetas conocidas.
+func TestAlternativasCategoriasValidas(t *testing.T) {
+	d := planDetailView(t, "ahri", "Ahri", 120, 70)
+	plan := d.lolPlan()
+	for _, g := range plan.Alternatives {
+		if len(g.Items) == 0 {
+			t.Errorf("grupo vacío para %q", g.Category)
+		}
+		label := altCategoryLabel(g.Category)
+		if label == "" {
+			t.Errorf("sin etiqueta para %q", g.Category)
+		}
+		for _, a := range g.Items {
+			has := false
+			for _, c := range a.Categories {
+				if c == g.Category {
+					has = true
+				}
+			}
+			if !has {
+				t.Errorf("%s en el grupo %q sin esa categoría", a.Name, g.Category)
+			}
+		}
+	}
+}
+
+// ─── estado de misión ──────────────────────────────────────────────
+
+// TestMisionAntesDespues: la tecla M cambia el inventario de BOT.
+func TestMisionAntesDespues(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 60)
+
+	antes := d.routeTabView()
+	if !strings.Contains(antes, "antes de la misión") {
+		t.Errorf("estado inicial inesperado:\n%s", antes)
+	}
+	if !strings.Contains(antes, "principal · botas") {
+		t.Error("antes de la misión las botas ocupan espacio principal")
+	}
+
+	// M alterna a "después".
+	d2, cmd := d.Update(keyMsg("M"))
+	if cmd == nil {
+		t.Error("M debía avisar con un toast")
+	}
+	despues := d2.routeTabView()
+	if !strings.Contains(despues, "después de la misión") {
+		t.Errorf("M no cambió el estado:\n%s", despues)
+	}
+	if !strings.Contains(despues, "ranura de misión") {
+		t.Error("después de la misión las botas van a la ranura")
+	}
+	// Y vuelve atrás.
+	d3, _ := d2.Update(keyMsg("M"))
+	if !strings.Contains(d3.routeTabView(), "antes de la misión") {
+		t.Error("M debía volver a 'antes'")
+	}
+}
+
+// TestMisionSoloAplicaABot: en otros roles la tecla no hace nada.
+func TestMisionSoloAplicaABot(t *testing.T) {
+	for _, c := range []struct{ key, name string }{
+		{"ahri", "Ahri"}, {"malphite", "Malphite"}, {"soraka", "Soraka"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := planDetailView(t, c.key, c.name, 120, 60)
+			before := d.session.botMissionDone
+			d2, _ := d.Update(keyMsg("M"))
+			if d2.session.botMissionDone != before {
+				t.Errorf("%s no debe tener estado de misión de botas", c.name)
+			}
+			if strings.Contains(d2.routeTabView(), "simula después") {
+				t.Errorf("%s no debe ofrecer el conmutador", c.name)
+			}
+		})
+	}
+}
+
+// ─── estados especiales ────────────────────────────────────────────
+
+// TestFallbackSinPosiciones: u.gg no trae item1..item5 → se dice.
+func TestFallbackSinPosiciones(t *testing.T) {
+	s := loadOffline(t, model.GameLoL) // fixtures de u.gg
+	ahri := findChampion(t, s, "Ahri")
+	d := newDetailView(ahri, s)
+	d.width, d.height = 120, 50
+	d.sync()
+
+	view := d.routeTabView()
+	if !strings.Contains(view, "no se puede reconstruir") &&
+		!strings.Contains(view, "no publica tablas por posición") {
+		t.Errorf("debía explicar la falta de datos:\n%s", view)
+	}
+}
+
+// TestSinCatalogo: sin catálogo no se inventan planes.
+func TestSinCatalogo(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 50)
+	d.session.ItemCatalog = nil
+	if p := d.lolPlan(); p != nil {
+		t.Errorf("sin catálogo no debe haber plan: %+v", p)
+	}
+	if v := d.routeTabView(); !strings.Contains(v, "sin datos suficientes") {
+		t.Errorf("debía indicar la falta de datos:\n%s", v)
+	}
+}
+
+// TestCatalogoIncompleto: con pocos objetos se muestra lo disponible y
+// se declara incompleto.
+func TestCatalogoIncompleto(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 60)
+	// Dejar solo tres objetos del catálogo.
+	full := d.session.ItemCatalog
+	reduced := map[int]lolitems.Item{}
+	n := 0
+	for id, it := range full {
+		if n >= 3 {
+			break
+		}
+		reduced[id] = it
+		n++
+	}
+	d.session.ItemCatalog = reduced
+	plan := d.lolPlan()
+	if plan == nil {
+		t.Skip("sin plan con catálogo reducido")
+	}
+	if plan.Complete {
+		t.Error("con un catálogo incompleto no puede estar completo")
+	}
+	if plan.Reason == "" {
+		t.Error("debe explicar por qué falta")
+	}
+}
+
+// TestPlanCacheadoNoSeRecalcula: pedir el plan dos veces devuelve el
+// mismo puntero (no recalcula en el render).
+func TestPlanCacheadoNoSeRecalcula(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 60)
+	p1 := d.lolPlan()
+	p2 := d.lolPlan()
+	if p1 != p2 {
+		t.Error("el plan se recalculó: debe cachearse por (campeón, rol, parche, misión)")
+	}
+	// Cambiar el estado de misión invalida la clave.
+	d.session.botMissionDone = true
+	p3 := d.lolPlan()
+	if p3 == p1 {
+		t.Error("cambiar la misión debe producir otro plan")
+	}
+}
+
+// ─── navegación y terminales ───────────────────────────────────────
+
+// TestTeclasDePestanaa: las pestañas nuevas son accesibles por número y
+// el resto no se rompió.
+func TestTeclasDePestanas(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 60)
+	tabs := d.tabs()
+	if len(tabs) != 7 {
+		t.Fatalf("pestañas = %v", tabs)
+	}
+	if tabs[1] != "Ruta" || tabs[2] != "Alt." {
+		t.Errorf("orden inesperado: %v", tabs)
+	}
+	for i, name := range tabs {
+		d2 := gotoTab(d, string(rune('1'+i)))
+		if d2.tabs()[d2.tab] != name {
+			t.Errorf("tecla %d llevó a %q, se esperaba %q", i+1, d2.tabs()[d2.tab], name)
+		}
+	}
+	// tab recorre y vuelve.
+	d2 := gotoTab(d, "7")
+	d3, _ := d2.Update(keyMsg("tab"))
+	if d3.tab != 0 {
+		t.Errorf("tab debía volver al inicio, quedó en %d", d3.tab)
+	}
+}
+
+// TestTerminalEstrecha: la barra de pestañas no desborda.
+func TestTerminalEstrecha(t *testing.T) {
+	for _, width := range []int{40, 50, 60, 80} {
+		t.Run(string(rune('0'+width/10))+string(rune('0'+width%10)), func(t *testing.T) {
+			d := planDetailView(t, "kaisa", "Kai'Sa", width, 30)
+			bar := d.tabsView()
+			if w := len([]rune(stripANSIStr(bar))); w > width {
+				t.Errorf("barra de %d columnas en terminal de %d", w, width)
+			}
+			// Y la vista completa no lanza pánico ni queda vacía.
+			if v := gotoTab(d, "2").tabView(); v == "" {
+				t.Error("la ruta quedó vacía en terminal estrecha")
+			}
+		})
+	}
+}
+
+// TestNoInterceptaTeclasAjenas: M no pisa u, v ni V.
+func TestNoInterceptaTeclasAjenas(t *testing.T) {
+	s := loadOffline(t, model.GameDeadlock)
+	abrams := findChampion(t, s, "Abrams")
+	d := newDetailView(abrams, s)
+	d.width, d.height = 120, 40
+	before := d.showUpgrades
+	d2, _ := d.Update(keyMsg("u"))
+	if d2.showUpgrades == before {
+		t.Error("u debía seguir plegando mejoras en Deadlock")
+	}
+	// M en Deadlock no cambia el estado de misión de LoL.
+	d3, _ := d.Update(keyMsg("M"))
+	if d3.session.botMissionDone {
+		t.Error("M no debe tener efecto fuera de LoL/BOT")
+	}
+}
+
+// ─── regresiones ───────────────────────────────────────────────────
+
+// TestDeadlockSinPlan: las pestañas nuevas no aparecen en Deadlock.
+func TestDeadlockSinPlan(t *testing.T) {
+	s := loadOffline(t, model.GameDeadlock)
+	abrams := findChampion(t, s, "Abrams")
+	d := newDetailView(abrams, s)
+	for _, name := range d.tabs() {
+		if name == "Ruta" || name == "Alternativas" {
+			t.Errorf("Deadlock no debe tener la pestaña %q", name)
+		}
+	}
+	if p := d.lolPlan(); p != nil {
+		t.Error("no debe haber plan de LoL en Deadlock")
+	}
+}
+
+// TestInvalidacionDeCache cubre las cinco dimensiones que deben
+// invalidar un plan ya calculado.
+func TestInvalidacionDeCache(t *testing.T) {
+	base := func() detailView { return planDetailView(t, "kaisa", "Kai'Sa", 118, 60) }
+
+	// (1) Mismo estado → se reutiliza.
+	d := base()
+	if d.lolPlan() != d.lolPlan() {
+		t.Error("sin cambios debe reutilizar el plan")
+	}
+
+	// (2) Catálogo distinto → invalida.
+	d = base()
+	p := d.lolPlan()
+	d.session.ItemCatalog = map[int]lolitems.Item{}
+	if d.lolPlan() == p {
+		t.Error("cambiar el catálogo debe invalidar el plan")
+	}
+
+	// (3) Fuente distinta → invalida.
+	d = base()
+	p = d.lolPlan()
+	d.CurrentBuild().Source = "ugg"
+	if d.lolPlan() == p {
+		t.Error("cambiar la fuente debe invalidar el plan")
+	}
+
+	// (4) Muestra distinta (recarga del mismo parche) → invalida.
+	d = base()
+	p = d.lolPlan()
+	d.CurrentBuild().Total.Games += 1000
+	if d.lolPlan() == p {
+		t.Error("una recarga con más partidas debe invalidar el plan")
+	}
+
+	// (5) Parche distinto → invalida.
+	d = base()
+	p = d.lolPlan()
+	d.CurrentBuild().Patch = "16.22"
+	if d.lolPlan() == p {
+		t.Error("cambiar el parche debe invalidar el plan")
+	}
+
+	// (6) Misión distinta → invalida (ya cubierto, se reafirma).
+	d = base()
+	p = d.lolPlan()
+	d.session.botMissionDone = true
+	if d.lolPlan() == p {
+		t.Error("cambiar la misión debe invalidar el plan")
+	}
+
+	// (7) Rol distinto → invalida.
+	d = base()
+	p = d.lolPlan()
+	other := *d.CurrentBuild()
+	other.Role = model.RoleSupport
+	d.champ.ByRole[model.RoleSupport] = &other
+	d.champ.Roles = append(d.champ.Roles, model.RoleSupport)
+	d.roleIdx = len(d.champ.Roles) - 1
+	if d.lolPlan() == p {
+		t.Error("cambiar el rol debe invalidar el plan")
+	}
+}
+
+// TestHuellaDeCatalogo: la huella cambia con el contenido y es estable.
+func TestHuellaDeCatalogo(t *testing.T) {
+	cat := loadItemCatalog(t)
+	h1 := catalogFingerprint(cat)
+	h2 := catalogFingerprint(cat)
+	if h1 != h2 {
+		t.Error("la huella debe ser estable para el mismo catálogo")
+	}
+	if h1 == 0 {
+		t.Error("un catálogo no vacío no debe dar huella 0")
+	}
+	// Cambiar un nombre cambia la huella.
+	mod := make(map[int]lolitems.Item, len(cat))
+	for id, it := range cat {
+		mod[id] = it
+	}
+	for id, it := range mod {
+		it.Name += " x"
+		mod[id] = it
+		break
+	}
+	if catalogFingerprint(mod) == h1 {
+		t.Error("cambiar un nombre debe cambiar la huella")
+	}
+	if catalogFingerprint(map[int]lolitems.Item{}) != 0 {
+		t.Error("un catálogo vacío debe dar huella 0")
+	}
+}
+
+// TestCacheInvalidaConGamesConstante es el caso que `Games` no
+// distingue: recarga del mismo parche y fuente con el MISMO total de
+// partidas pero objetos y estadísticas distintas. Debe producir un plan
+// nuevo, no reutilizar el viejo.
+func TestCacheInvalidaConGamesConstante(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 60)
+	p1 := d.lolPlan()
+	before := p1.Steps[0].Item
+	total := d.CurrentBuild().Total.Games
+
+	// Cambiar el objeto recomendado del primer slot, conservando
+	// exactamente el mismo número total de partidas.
+	cb := d.CurrentBuild()
+	cb.ItemSlots[0][0].ID = 3031
+	cb.ItemSlots[0][0].Stats.Wins = cb.ItemSlots[0][0].Stats.Games
+	cb.ItemSlots[0][0].AvgBuyS += 120
+
+	if cb.Total.Games != total {
+		t.Fatalf("Games debía seguir constante: %d vs %d", cb.Total.Games, total)
+	}
+
+	p2 := d.lolPlan()
+	if p1 == p2 {
+		t.Fatal("caché obsoleta: mismo plan con datos distintos y Games constante")
+	}
+	if p2.Steps[0].Item == before {
+		t.Errorf("el plan reutilizó el objeto %d en vez de recalcular", before)
+	}
+	if p2.Steps[0].Item != 3031 {
+		t.Errorf("paso 1 = %d, se esperaba 3031", p2.Steps[0].Item)
+	}
+}
+
+// TestStatsFingerprint: la huella cambia con cualquier dato relevante y
+// es estable cuando no cambia nada.
+func TestStatsFingerprint(t *testing.T) {
+	base := func() *model.CleanBuild {
+		return toCleanBuildFixture(t)
+	}
+	h1 := statsFingerprint(base())
+	if h1 != statsFingerprint(base()) {
+		t.Error("la huella debe ser determinista")
+	}
+
+	cambios := map[string]func(*model.CleanBuild){
+		"wins totales": func(cb *model.CleanBuild) { cb.Total.Wins++ },
+		"id de slot":   func(cb *model.CleanBuild) { cb.ItemSlots[0][0].ID = 3031 },
+		"games slot":   func(cb *model.CleanBuild) { cb.ItemSlots[0][0].Games++ },
+		"wins slot":    func(cb *model.CleanBuild) { cb.ItemSlots[0][0].Wins++ },
+		"minuto medio": func(cb *model.CleanBuild) { cb.ItemSlots[0][0].AvgBuyS += 1 },
+		"botas":        func(cb *model.CleanBuild) { cb.Boots[0].ID = 3111 },
+		// El core del fixture no viene en item_slots: se puebla a mano
+		// para probar que también entra en la huella.
+		"core": func(cb *model.CleanBuild) {
+			cb.CoreItems = []model.RankedItem{{ItemStats: model.ItemStats{ID: 3089}}}
+		},
+	}
+	for name, mut := range cambios {
+		cb := base()
+		mut(cb)
+		if statsFingerprint(cb) == h1 {
+			t.Errorf("la huella no cambió al mutar %s", name)
+		}
+	}
+	if statsFingerprint(nil) != 0 {
+		t.Error("nil debe dar huella 0")
+	}
+}
