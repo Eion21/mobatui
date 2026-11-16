@@ -103,13 +103,14 @@ type BuildLoader interface {
 // hybridLoadedMsg llega cuando la build híbrida terminó de calcularse.
 type hybridLoadedMsg struct {
 	ChampKey string
+	Key      string
 	Build    *HybridBuildView
 	Err      error
 }
 
-func loadHybridCmd(l BuildLoader, champKey string) tea.Cmd {
+func loadHybridCmd(l BuildLoader, champKey, key string) tea.Cmd {
 	return func() tea.Msg {
 		b, err := l.LoadHybrid(champKey)
-		return hybridLoadedMsg{ChampKey: champKey, Build: b, Err: err}
+		return hybridLoadedMsg{ChampKey: champKey, Key: key, Build: b, Err: err}
 	}
 }

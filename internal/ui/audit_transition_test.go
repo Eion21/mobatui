@@ -35,7 +35,15 @@ func TestTransitionObservedThenHybrid(t *testing.T) {
 		t.Errorf("la ruta provisional no está identificada: %s", text)
 	}
 
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Build: sampleHybrid()})
+	if a.session.Hybrids == nil {
+		a.session.Hybrids = map[string]*HybridBuildView{}
+	}
+	if a.session.HybridLoading == nil {
+		a.session.HybridLoading = map[string]string{}
+	}
+	a.session.Hybrids["Abrams"] = nil
+	a.session.HybridLoading["Abrams"] = a.session.HybridKey
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Build: sampleHybrid()})
 	text = hybridText(a)
 	if !strings.Contains(text, "Build híbrida") {
 		t.Errorf("la build híbrida no reemplazó a la ruta: %s", text)
@@ -51,7 +59,15 @@ func TestTransitionHybridThenObserved(t *testing.T) {
 	a := hybridApp(t, nil, 12, 120, 40)
 	a.session.Hybrids["Abrams"] = nil
 
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Build: sampleHybrid()})
+	if a.session.Hybrids == nil {
+		a.session.Hybrids = map[string]*HybridBuildView{}
+	}
+	if a.session.HybridLoading == nil {
+		a.session.HybridLoading = map[string]string{}
+	}
+	a.session.Hybrids["Abrams"] = nil
+	a.session.HybridLoading["Abrams"] = a.session.HybridKey
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Build: sampleHybrid()})
 	if !strings.Contains(hybridText(a), "Build híbrida") {
 		t.Fatal("la build no se mostró")
 	}
@@ -73,7 +89,7 @@ func TestTransitionLateResponseOtherHero(t *testing.T) {
 	a := hybridApp(t, sampleHybrid(), 12, 120, 40)
 	before := hybridText(a)
 
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "OtroHeroe", Build: sampleHybrid()})
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "OtroHeroe", Key: a.session.HybridKey, Build: sampleHybrid()})
 	a = routeLoadingUpdate(a, runsLoadedMsg{ChampKey: "OtroHeroe", Steps: obsRoute(3)})
 
 	if got := hybridText(a); got != before {
@@ -96,11 +112,27 @@ func TestTransitionSelectionSurvivesBothOrders(t *testing.T) {
 			sel := a.detail.cardList()[a.detail.itemIdx].item.ID
 
 			if hybridFirst {
-				a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Build: sampleHybrid()})
+				if a.session.Hybrids == nil {
+					a.session.Hybrids = map[string]*HybridBuildView{}
+				}
+				if a.session.HybridLoading == nil {
+					a.session.HybridLoading = map[string]string{}
+				}
+				a.session.Hybrids["Abrams"] = nil
+				a.session.HybridLoading["Abrams"] = a.session.HybridKey
+				a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Build: sampleHybrid()})
 				a = routeLoadingUpdate(a, runsLoadedMsg{ChampKey: "Abrams", Steps: obsRoute(6)})
 			} else {
 				a = routeLoadingUpdate(a, runsLoadedMsg{ChampKey: "Abrams", Steps: obsRoute(6)})
-				a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Build: sampleHybrid()})
+				if a.session.Hybrids == nil {
+					a.session.Hybrids = map[string]*HybridBuildView{}
+				}
+				if a.session.HybridLoading == nil {
+					a.session.HybridLoading = map[string]string{}
+				}
+				a.session.Hybrids["Abrams"] = nil
+				a.session.HybridLoading["Abrams"] = a.session.HybridKey
+				a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Build: sampleHybrid()})
 			}
 			cards := a.detail.cardList()
 			if a.detail.itemIdx >= len(cards) {
@@ -125,7 +157,15 @@ func TestTransitionErrorThenHybrid(t *testing.T) {
 	if len(a.session.Routes["Abrams"]) != 0 {
 		t.Error("un error no debe dejar pasos")
 	}
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Build: sampleHybrid()})
+	if a.session.Hybrids == nil {
+		a.session.Hybrids = map[string]*HybridBuildView{}
+	}
+	if a.session.HybridLoading == nil {
+		a.session.HybridLoading = map[string]string{}
+	}
+	a.session.Hybrids["Abrams"] = nil
+	a.session.HybridLoading["Abrams"] = a.session.HybridKey
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Build: sampleHybrid()})
 	if !strings.Contains(hybridText(a), "Build híbrida") {
 		t.Error("la build no se mostró tras un error de ruta")
 	}
@@ -138,7 +178,7 @@ func TestTransitionHybridErrorFallsBackToRoute(t *testing.T) {
 	a.session.Hybrids["Abrams"] = nil
 
 	a = routeLoadingUpdate(a, runsLoadedMsg{ChampKey: "Abrams", Steps: obsRoute(6)})
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Err: fmt.Errorf("sin red")})
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Err: fmt.Errorf("sin red")})
 
 	text := hybridText(a)
 	if strings.Contains(text, "Build híbrida") {
@@ -162,7 +202,15 @@ func TestTransitionNoScrollReset(t *testing.T) {
 	if before == 0 {
 		t.Fatal("precondición: no se desplazó")
 	}
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Build: sampleHybrid()})
+	if a.session.Hybrids == nil {
+		a.session.Hybrids = map[string]*HybridBuildView{}
+	}
+	if a.session.HybridLoading == nil {
+		a.session.HybridLoading = map[string]string{}
+	}
+	a.session.Hybrids["Abrams"] = nil
+	a.session.HybridLoading["Abrams"] = a.session.HybridKey
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Build: sampleHybrid()})
 	if a.detail.vp.YOffset == 0 && before != 0 {
 		t.Error("la llegada de la build reinició el scroll")
 	}

@@ -128,6 +128,9 @@ type Session struct {
 	// Hybrids guarda la build híbrida por héroe (carga bajo demanda).
 	// nil = en curso; ausente = no pedida; presente = calculada.
 	Hybrids map[string]*HybridBuildView
+	// HybridLoading registra la clave de la solicitud en curso por
+	// héroe, para descartar respuestas tardías u obsoletas.
+	HybridLoading map[string]string
 	// HybridLoader trae la build híbrida bajo demanda; nil = sin loader.
 	HybridLoader BuildLoader
 	// HybridKey es la clave de vigencia de las builds híbridas de esta
@@ -761,10 +764,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.session.Hybrids == nil {
 			a.session.Hybrids = map[string]*HybridBuildView{}
 		}
-		if m.Build != nil {
-			m.Build.Key = a.session.HybridKey
+		// Respuesta obsoleta: ignora sin tocar el estado vigente ni la carga en curso.
+		if m.Key != a.session.HybridKey {
+			return a, nil
 		}
-		a.session.Hybrids[m.ChampKey] = m.Build
+		if loading, ok := a.session.HybridLoading[m.ChampKey]; !ok || loading != m.Key {
+			return a, nil
+		}
+		delete(a.session.HybridLoading, m.ChampKey)
+		if m.Err != nil || m.Build == nil {
+			// Error o resultado vacío: libera la solicitud para permitir reintentos.
+			delete(a.session.Hybrids, m.ChampKey)
+		} else {
+			m.Build.Key = m.Key
+			a.session.Hybrids[m.ChampKey] = m.Build
+		}
 		active := a.screen == screenDetail && a.detail.champ != nil && a.detail.champ.Key == m.ChampKey
 		if active {
 			selected, hasSelection := 0, false
@@ -784,7 +798,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.detail.scrollAnchor = a.detail.itemIdx
 			a.detail.sync()
 		}
-		if m.Err != nil {
+		if m.Err != nil || m.Build == nil {
 			return a, toastCmd("Build híbrida no disponible")
 		}
 		return a, nil
@@ -983,7 +997,11 @@ func hybridCmdFor(a App) tea.Cmd {
 		delete(a.session.Hybrids, key)
 	}
 	a.session.Hybrids[key] = nil // marca "en curso"
-	return loadHybridCmd(a.session.HybridLoader, key)
+	if a.session.HybridLoading == nil {
+		a.session.HybridLoading = map[string]string{}
+	}
+	a.session.HybridLoading[key] = a.session.HybridKey
+	return loadHybridCmd(a.session.HybridLoader, key, a.session.HybridKey)
 }
 
 // updatePick maneja el selector de juego.

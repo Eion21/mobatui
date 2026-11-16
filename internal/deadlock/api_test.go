@@ -306,3 +306,29 @@ type failTransport struct{}
 func (failTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("sin red (test)")
 }
+
+func TestAPIOmittedCountsArePerInstance(t *testing.T) {
+	c1, err := cache.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := cache.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a1 := NewAPI(c1, "testdata/deadlock")
+	a2 := NewAPI(c2, "testdata/deadlock")
+
+	a1.omitted = 2
+	a2.omitted = 5
+
+	if got := a1.Omitted(); got != 2 {
+		t.Fatalf("a1.Omitted() = %d, want 2", got)
+	}
+	if got := a2.Omitted(); got != 5 {
+		t.Fatalf("a2.Omitted() = %d, want 5", got)
+	}
+	if got := a1.Omitted(); got != 2 {
+		t.Fatalf("a1.Omitted() changed after a2 update = %d, want 2", got)
+	}
+}

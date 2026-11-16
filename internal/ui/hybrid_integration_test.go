@@ -218,7 +218,12 @@ func TestHybridSelectionAndScrollPreserved(t *testing.T) {
 	before := a.detail.vp.YOffset
 	selected := a.detail.cardList()[a.detail.itemIdx].item.ID
 
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Build: sampleHybrid()})
+	if a.session.HybridLoading == nil {
+		a.session.HybridLoading = map[string]string{}
+	}
+	a.session.Hybrids["Abrams"] = nil
+	a.session.HybridLoading["Abrams"] = a.session.HybridKey
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Build: sampleHybrid()})
 	if a.detail.vp.YOffset != before {
 		t.Errorf("la build movió el scroll: %d → %d", before, a.detail.vp.YOffset)
 	}
@@ -271,7 +276,12 @@ func TestHybridLoadingState(t *testing.T) {
 // vista; se cae a la ruta observada.
 func TestHybridErrorKeepsRoute(t *testing.T) {
 	a := hybridApp(t, nil, 10, 120, 40)
-	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Err: fmt.Errorf("sin red")})
+	if a.session.HybridLoading == nil {
+		a.session.HybridLoading = map[string]string{}
+	}
+	a.session.Hybrids["Abrams"] = nil
+	a.session.HybridLoading["Abrams"] = a.session.HybridKey
+	a = routeLoadingUpdate(a, hybridLoadedMsg{ChampKey: "Abrams", Key: a.session.HybridKey, Err: fmt.Errorf("sin red")})
 	if a.session.Hybrids["Abrams"] != nil {
 		t.Error("un error no debe dejar una build parcial")
 	}
