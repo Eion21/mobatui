@@ -24,6 +24,7 @@ import (
 	"github.com/Eion21/mobatui/internal/staticdata"
 	"github.com/Eion21/mobatui/internal/ugg"
 	"github.com/Eion21/mobatui/internal/ui"
+	"github.com/Eion21/mobatui/internal/version"
 )
 
 // defaultDataDir resuelve la caché runtime fuera del directorio de
@@ -60,8 +61,23 @@ func main() {
 		locale      = flag.String("locale", "es_ES", "idioma de Data Dragon")
 		offline     = flag.Bool("offline", false, "no acceder a la red: solo caché y fixtures")
 		refresh     = flag.Bool("refresh", false, "invalidar la caché estática antes de arrancar")
+		showVersion = flag.Bool("version", false, "mostrar la versión y salir")
 	)
+	// Añade la versión al texto de --help y acepta -version además de
+	// --version (flag ya trata ambos guiones por igual).
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "%s — builds y estadísticas de MOBA en la terminal\n\n", version.Get().Line())
+		fmt.Fprintf(flag.CommandLine.Output(), "Uso:\n  mobatui [opciones]\n\nOpciones:\n")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
+
+	// La versión se resuelve y se imprime ANTES de crear la caché, cargar
+	// datos o arrancar la TUI: no debe tocar la red ni el disco.
+	if *showVersion {
+		fmt.Print(version.Get().Verbose())
+		return
+	}
 
 	cacheDir := filepath.Join(*dataDir, "cache")
 	os.MkdirAll(cacheDir, 0o755)
