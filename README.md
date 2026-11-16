@@ -40,6 +40,7 @@ Desarrollada en Go con [Bubble Tea](https://github.com/charmbracelet/bubbletea) 
 - **Arte en terminal (Truecolor):** Iconos de ítems y retratos de héroes/campeones renderizados directamente en consola.
 - **Funciona offline:** Caché local en disco con TTL, degradación controlada (stale-if-error) y fallback a fixtures incluidos.
 - **Monitor de partida (`m`):** Detecta automáticamente si el juego está abierto y, en League of Legends, identifica tu campeón en tiempo real mediante la *Live Client Data API*.
+- **Identificable y actualizable:** `mobatui --version` muestra versión, commit, Go y plataforma. Al arrancar avisa si hay una versión nueva en GitHub (sin bloquear y sin autoactualizarse); se desactiva con `-no-update-check` o `-offline`.
 
 ### Deadlock (vía [deadlock-api.com](https://deadlock-api.com))
 - **Generador híbrido de builds:** Combina estadística por ítem con un motor de progresión que respeta cadenas de mejora, consumo de componentes y límites de inventario.
@@ -50,6 +51,8 @@ Desarrollada en Go con [Bubble Tea](https://github.com/charmbracelet/bubbletea) 
 ### League of Legends (vía [lolalytics.com](https://lolalytics.com))
 - **Todo en un lugar:** Builds de objetos, páginas de runas, orden de habilidades y hechizos de invocador.
 - **Ranking por cota inferior de Wilson:** Evita que muestras pequeñas con win rates inflados superen a builds probadas en decenas de miles de partidas.
+- **Ruta de compra e inventario final (`Ruta`):** Orden de compras con minuto medio, botas, inventario con ranura explícita y motivo cuando falta un objeto.
+- **Alternativas por función (`Alt.`):** Hasta 12 candidatos distintos agrupados en categorías, repartidos por rondas para que ninguna quede desatendida.
 
 ---
 
@@ -79,8 +82,10 @@ La caché se guarda en el directorio de caché del usuario (por defecto `~/.cach
 
 | Flag | Por defecto | Descripción |
 | --- | --- | --- |
+| `-version` / `--version` | — | Muestra versión, commit, Go y plataforma, y sale sin tocar caché ni red |
 | `-data` | `~/.cache/mobatui` | Directorio para la caché en tiempo de ejecución |
-| `-offline` | `false` | Modo sin red: usa únicamente caché local y fixtures |
+| `-offline` | `false` | Modo sin red: usa únicamente caché local y fixtures (también desactiva el aviso de versión) |
+| `-no-update-check` | `false` | No comprobar si hay una versión nueva en GitHub |
 | `-refresh` | `false` | Invalida la caché estática antes de iniciar |
 | `-locale` | `es_ES` | Idioma de Data Dragon para League of Legends |
 | `-ugg` | `testdata/ugg` | Directorio de datos/dumps de u.gg |
@@ -97,10 +102,12 @@ La caché se guarda en el directorio de caché del usuario (por defecto `~/.cach
 | `enter` | Abrir héroe/campeón o abrir detalle del ítem seleccionado |
 | `escribir` | Filtrar la lista de héroes/campeones en tiempo real |
 | `tab` | Cambiar criterio de orden en la lista / cambiar pestaña en detalle |
-| `1`-`4` / `1`-`5` | Saltar directamente a una pestaña (`Ítems`, `Resumen`, `Matchups`, `Habilidades`) |
+| `1`-`7` | Saltar directamente a una pestaña (LoL: `Ítems`, `Ruta`, `Alt.`, `Resumen`, `Runas`, `Habil.`, `Match.`) |
 | `←↑↓→`, `hjkl` | Mover selección entre tarjetas o filas |
 | `r` / `R` | Forzar recarga (o rotar rol adelante/atrás en vista de detalle) |
-| `u` | Plegar o desplegar tarjetas de mejora |
+| `u` | Plegar o desplegar tarjetas de mejora (Deadlock) |
+| `M` | Conmutar el inventario de BOTTOM entre antes y después de la misión |
+| `v` / `V` | Abrir la release nueva en el navegador / descartar el aviso |
 | `a` | Cambiar modo de retrato |
 | `m` | Activar o desactivar el monitor de juego |
 | `?` | Mostrar/ocultar ayuda de atajos |
@@ -130,6 +137,32 @@ El generador es deliberadamente conservador respecto a lo que afirma:
 
 > **Nota sobre el Win Rate:** Un porcentaje de victoria alto **no** se interpreta como causalidad. Los ítems caros comprados cuando un equipo ya va ganando tienen win rates inflados; el sistema corrige este sesgo en lugar de premiarlo.
 
+### Ruta sugerida y alternativas (League of Legends)
+
+La pestaña **`Ruta`** muestra el orden de compra y el inventario final; la pestaña **`Alt.`** agrupa candidatos por función.
+
+> **Importante — ruta compuesta, no secuencia observada.** Lolalytics publica `item1..item5` como *posiciones de compra independientes*: "qué se compra primero", "qué se compra segundo", etc. Cada paso es el objeto más frecuente en esa posición, pero **la ruta resultante no es la secuencia de ninguna partida real**. Por eso se rotula *"basada en compras observadas"*.
+
+Las combinaciones de tres objetos (`builtBootSet3`) se mantienen **fuera** del planificador: publican el mismo conjunto en varias permutaciones y su semántica no está demostrada, así que no se usan para inferir orden.
+
+**Reglas de inventario y misión (temporada 2026):**
+
+| Rol | Ranura de misión | Efecto |
+| --- | --- | --- |
+| BOTTOM | Botas | Antes de completarla las botas ocupan un espacio principal; después pasan a la ranura y quedan 6 espacios principales |
+| SUPPORT | Guardianes de control | El objeto de soporte y las botas ocupan espacios principales; **no** hereda la ranura de botas de BOTTOM |
+| MID | — | La misión mejora las botas Tier 2 a Tier 3, pero no libera espacio |
+| TOP / JUNGLE | — | Inventario normal de 6 espacios |
+
+La tecla `M` conmuta la vista de BOTTOM entre antes y después de la misión. Es una **preferencia de vista**: la app no deduce el estado real de la partida. Cuando falta evidencia para el sexto objeto, el plan se declara **incompleto** con el motivo, en lugar de inventarlo.
+
+### Fuentes y fallback
+
+- **Lolalytics** es la fuente principal: aporta posiciones de compra, botas, combinaciones y hechizos.
+- **u.gg** actúa de respaldo cuando Lolalytics no está disponible. **No publica tablas por posición**, así que con u.gg no se reconstruye la ruta: se muestran las estadísticas disponibles y se indica el motivo.
+- Un catálogo incompleto o un parche que no cuadra se informan por separado: *"parche incompatible"* (ningún id del catálogo) frente a *"N objetos no están en el catálogo"* (ids sueltos ausentes).
+- Los objetos de misión de soporte se identifican por id y se marcan como tales: **no se les inventa un minuto de compra**.
+
 ### Niveles de confianza
 
 - **Alta:** Muestra grande, intervalo de incertidumbre estrecho y consistencia en los datos.
@@ -144,6 +177,9 @@ El generador es deliberadamente conservador respecto a lo que afirma:
 - **Cobertura de héroes en Deadlock:** El catálogo incluye 65 héroes; 44 cuentan con suficientes partidas en caché para generar rutas completas (el resto muestra estadísticas generales sin orden de compra, y 2 héroes en desarrollo aún no tienen kit publicado).
 - **Etiquetas situacionales:** Se derivan de propiedades verificables del objeto (nombre y categoría), no de un análisis causal contra héroes específicos.
 - **Dependencia de marcado en LoL:** Los datos de League of Legends se extraen del HTML renderizado de Lolalytics; cambios en su estructura web pueden requerir actualizar el parser.
+- **Ruta de LoL compuesta:** La ruta se construye con las posiciones de compra más frecuentes por separado; no representa una partida real. Con u.gg (respaldo) no hay posiciones y no se reconstruye ruta.
+- **Estado de misión manual en BOTTOM:** La app no puede conocer si completaste la misión; `M` es una preferencia de vista para alternar antes/después.
+- **Aviso de versión, no autoactualización:** La comprobación solo informa de que existe una release nueva; nunca descarga ni reemplaza el binario.
 
 ---
 
