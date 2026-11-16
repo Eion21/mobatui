@@ -358,7 +358,7 @@ func (a *APIClient) shopItemsFull() (shop map[int]apiItem, abilityNames map[int]
 	}
 
 	var items []apiItem
-	err = getJSON(a, "/v1/assets/items", "items.json", ttlAssets, &items)
+	err = getItems(a, &items)
 	if err == nil {
 		shop = map[int]apiItem{}
 		abilityNames = map[int]string{}
@@ -1001,9 +1001,110 @@ func (a *APIClient) allItems() []apiItem {
 		return a.allItemsCache
 	}
 	var items []apiItem
-	if err := getJSON(a, "/v1/assets/items", "items.json", ttlAssets, &items); err != nil {
+	if err := getItems(a, &items); err != nil {
 		return nil
 	}
 	a.allItemsCache = items
 	return items
+}
+
+// getItems descarga y decodifica el catálogo de ítems. El endpoint
+// entrega una lista; el respaldo local (items.json) entrega
+// {"data": {id: …}}, así que ambas formas se aceptan.
+func getItems(a *APIClient, items *[]apiItem) error {
+	body, err := a.get("/v1/assets/items", "items.json", ttlAssets)
+	if err != nil {
+		return err
+	}
+	if err := decodeItemsResponse(body, items); err != nil {
+		return fmt.Errorf("deadlock-api: /v1/assets/items inválido: %w", err)
+	}
+	return nil
+}
+
+// decodeItemsResponse acepta las dos formas de catálogo que existen en
+// el proyecto: la lista del endpoint /v1/assets/items (contrato real,
+// confirmado contra la respuesta cacheada de la API) y el objeto
+// {"data": {id: ítem}} del fixture local, donde el id vive en la clave.
+//
+// Un cuerpo que no sea ninguna de las dos formas devuelve error: no se
+// convierte en un catálogo vacío silencioso. La única excepción es la
+// lista vacía, que sí es un catálogo vacío legítimo.
+//
+// El fixture solo contiene ítems comprables y no declara "type"; si el
+// documento entero omite el campo, se marcan como upgrade para que el
+// respaldo local siga sirviendo nombres y cadenas de mejora sin red.
+// Esta inferencia NO toca la API real: sus 782 entradas declaran "type".
+func decodeItemsResponse(body []byte, items *[]apiItem) error {
+	var array []apiItem
+	if err := json.Unmarshal(body, &array); err == nil {
+		// "null" decodifica a nil sin error, pero no es un catálogo.
+		if array == nil && !isJSONArray(body) {
+			return fmt.Errorf("decodificar catálogo: se esperaba lista u objeto data")
+		}
+		*items = array
+		return nil
+	}
+
+	var object struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &object); err != nil {
+		return fmt.Errorf("decodificar catálogo: %w", err)
+	}
+	if object.Data == nil {
+		return fmt.Errorf("decodificar catálogo: objeto sin campo data")
+	}
+
+	result := make([]apiItem, 0, len(object.Data))
+	declaresType := false
+	byID := make(map[int]string, len(object.Data))
+	for id, raw := range object.Data {
+		var item apiItem
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return fmt.Errorf("decodificar ítem %q: %w", id, err)
+		}
+		if item.ID == 0 {
+			if _, err := fmt.Sscanf(id, "%d", &item.ID); err != nil {
+				return fmt.Errorf("decodificar id de ítem %q: %w", id, err)
+			}
+		}
+		// Dos claves con el mismo id harían el orden ambiguo: es un
+		// documento corrupto, no un catálogo válido.
+		if prev, dup := byID[item.ID]; dup {
+			return fmt.Errorf("decodificar catálogo: id %d duplicado (%q y %q)", item.ID, prev, id)
+		}
+		byID[item.ID] = id
+		if item.Type != "" {
+			declaresType = true
+		}
+		result = append(result, item)
+	}
+	if !declaresType {
+		// Documento del fixture: sin "type" no hay habilidades ni armas
+		// y shop queda vacío aunque el catálogo exista.
+		for i := range result {
+			result[i].Type = "upgrade"
+		}
+	}
+	// Orden determinista y total: los ids son únicos, así que no hay
+	// empates que dependan del orden del mapa.
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	*items = result
+	return nil
+}
+
+// isJSONArray indica si el cuerpo (ignorando espacios) empieza por '['.
+func isJSONArray(body []byte) bool {
+	for _, b := range body {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
