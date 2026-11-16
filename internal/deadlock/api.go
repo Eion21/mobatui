@@ -74,6 +74,7 @@ type APIClient struct {
 	// habilidades y sus dependent_abilities).
 	allItemsMu    sync.Mutex
 	allItemsCache []apiItem
+	omitted       int
 }
 
 var _ staticdata.Provider = (*APIClient)(nil)
@@ -616,13 +617,13 @@ func (a *APIClient) LoadBuilds() ([]*model.ChampionBuilds, error) {
 		return LoadDir(a.fixtureBuild)
 	}
 	a.fellBack = false
-	omittedTotal = omitted
+	a.omitted = omitted
 	return out, nil
 }
 
 // Omitted devuelve el número de héroes descartados por la última
-// carga (sin asset público o con datos corruptos).
-func (a *APIClient) Omitted() int { return omittedTotal }
+// carga (sin asset público o con datos corruptos) en esta instancia.
+func (a *APIClient) Omitted() int { return a.omitted }
 
 // DataState implementa staticdata.FreshnessProvider: dice si lo que
 // se está sirviendo viene de red, de caché fresca, de caché caducada
@@ -645,8 +646,6 @@ func (a *APIClient) DataState() (string, time.Duration, bool) {
 		return "red", age, true
 	}
 }
-
-var omittedTotal int
 
 // loadTrend agrega el WR mensual de cada héroe (últimas 6 ventanas).
 func (a *APIClient) loadTrend() map[int][]model.WRTrendPoint {
