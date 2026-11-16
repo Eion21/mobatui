@@ -224,6 +224,10 @@ type Loader struct {
 	// RunsLoaders trae la ruta de compra bajo demanda por juego
 	// (Deadlock); nil = sin datos de ruta.
 	RunsLoaders map[model.Game]RunsLoader
+	// UpdateCheck, si no es nil, comprueba si hay una versión más
+	// reciente. Se ejecuta UNA vez por arranque en segundo plano; nil =
+	// comprobación desactivada (-no-update-check, config u offline).
+	UpdateCheck func(context.Context) (UpdateInfo, error)
 }
 
 // loadBuilds resuelve la fuente de builds crudos de un juego.
@@ -467,6 +471,44 @@ type App struct {
 	monCh         chan procmon.Event
 	detected      model.Game // juego activo según el monitor ("" = ninguno)
 	detectedChamp string     // personaje detectado en el juego activo
+	// update es la actualización disponible, si la comprobación en
+	// segundo plano encontró una versión superior. nil = sin aviso.
+	update *UpdateInfo
+	// updateChecked evita repetir la comprobación en cada re-entrada.
+	updateChecked bool
+}
+
+// UpdateInfo describe una versión más reciente publicada.
+type UpdateInfo struct {
+	Version string // "0.2.1"
+	URL     string // enlace oficial, ya validado; "" = sin abrir
+}
+
+// updateAvailableMsg llega cuando la comprobación en segundo plano
+// termina. Update=false significa "sin novedades o sin datos".
+type updateAvailableMsg struct {
+	Info   UpdateInfo
+	Update bool
+}
+
+// checkUpdateCmd lanza la comprobación en una goroutine de Bubble Tea:
+// no bloquea la primera pantalla.
+func checkUpdateCmd(fn func(context.Context) (UpdateInfo, error)) tea.Cmd {
+	return func() tea.Msg {
+		if fn == nil {
+			return updateAvailableMsg{}
+		}
+		// El timeout real vive en updatecheck; el contexto permite
+		// cancelar si la app se cierra antes.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		info, err := fn(ctx)
+		if err != nil || info.Version == "" {
+			// Silencio: un fallo de red nunca es asunto del usuario.
+			return updateAvailableMsg{}
+		}
+		return updateAvailableMsg{Info: info, Update: true}
+	}
 }
 
 func NewApp(loader Loader) App {
@@ -597,6 +639,17 @@ func (a App) startLoad(g model.Game) (App, tea.Cmd) {
 }
 
 func (a App) Init() tea.Cmd {
+	// Comprobación de versión: una sola vez por arranque y en paralelo
+	// con el resto. Si no hay comprobador (opt-out, offline o -no-update-check)
+	// no se lanza nada.
+	if !a.updateChecked && a.loader.UpdateCheck != nil && !a.cfg.UpdateCheckOff {
+		a.updateChecked = true
+		var cmds []tea.Cmd
+		if !a.cfg.MonitorOff {
+			cmds = append(cmds, a.startMonitor())
+		}
+		return tea.Batch(append(cmds, checkUpdateCmd(a.loader.UpdateCheck))...)
+	}
 	if a.cfg.MonitorOff {
 		return nil
 	}
@@ -702,6 +755,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, listenMonitor(a.monCh)
 
 	case monStoppedMsg:
+		return a, nil
+
+	case updateAvailableMsg:
+		// Aviso discreto y persistente: se guarda en el estado y el
+		// usuario lo descarta con "u" o al abrirlo. Nunca interrumpe.
+		if m.Update {
+			a.update = &m.Info
+		}
 		return a, nil
 
 	case toastMsg:
@@ -830,6 +891,29 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				cmd := a.startMonitor()
 				return a, tea.Batch(cmd, toastCmd("Monitor de juegos: activo"))
+			}
+		case "v":
+			// Aviso de versión: "v" abre el release (si hay enlace
+			// validado) y lo descarta. Es una tecla libre en todas las
+			// pantallas; "esc" se reserva para navegar/volver y "u" ya
+			// pliega mejoras en Deadlock.
+			if a.update != nil {
+				url := a.update.URL
+				a.update = nil
+				if url != "" {
+					if err := openURL(url); err != nil {
+						return a, toastCmd("No se pudo abrir el enlace")
+					}
+					return a, toastCmd("Abriendo GitHub Releases…")
+				}
+				return a, toastCmd("Aviso descartado")
+			}
+		case "V":
+			// Mayúscula: descarta sin abrir nada (útil cuando el
+			// navegador no está disponible).
+			if a.update != nil {
+				a.update = nil
+				return a, toastCmd("Aviso descartado")
 			}
 		case "ctrl+c":
 			if a.monStop != nil {
@@ -1187,11 +1271,22 @@ func (a App) footer() string {
 	if a.detected != "" {
 		detected = stValue.Render("● " + a.detected.DisplayName() + " en juego ")
 	}
+	// Aviso de versión: discreto y persistente hasta que se descarte.
+	updatePart := ""
+	if a.update != nil {
+		label := fmt.Sprintf("Nueva versión: v%s · GitHub Releases ", a.update.Version)
+		action := "· V descartar "
+		if a.update.URL != "" {
+			action = "· v abrir · V descartar "
+		}
+		updatePart = stWinrateBad.Render(label) + stDim.Render(action)
+	}
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		stStatusBar.Render(a.status),
 		" ",
 		detected,
 		toastPart,
+		updatePart,
 		a.help.ShortHelpView(a.shortHelp()))
 }
 

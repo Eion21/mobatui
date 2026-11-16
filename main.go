@@ -24,6 +24,7 @@ import (
 	"github.com/Eion21/mobatui/internal/staticdata"
 	"github.com/Eion21/mobatui/internal/ugg"
 	"github.com/Eion21/mobatui/internal/ui"
+	"github.com/Eion21/mobatui/internal/updatecheck"
 	"github.com/Eion21/mobatui/internal/version"
 )
 
@@ -55,13 +56,14 @@ func defaultFixtureDir(sub string) string {
 
 func main() {
 	var (
-		dataDir     = flag.String("data", defaultDataDir(), "directorio de caché runtime")
-		uggDir      = flag.String("ugg", defaultFixtureDir("ugg"), "directorio de datos/dumps de u.gg")
-		deadlockDir = flag.String("deadlock", defaultFixtureDir(filepath.Join("deadlock", "builds")), "directorio de builds de Deadlock")
-		locale      = flag.String("locale", "es_ES", "idioma de Data Dragon")
-		offline     = flag.Bool("offline", false, "no acceder a la red: solo caché y fixtures")
-		refresh     = flag.Bool("refresh", false, "invalidar la caché estática antes de arrancar")
-		showVersion = flag.Bool("version", false, "mostrar la versión y salir")
+		dataDir       = flag.String("data", defaultDataDir(), "directorio de caché runtime")
+		uggDir        = flag.String("ugg", defaultFixtureDir("ugg"), "directorio de datos/dumps de u.gg")
+		deadlockDir   = flag.String("deadlock", defaultFixtureDir(filepath.Join("deadlock", "builds")), "directorio de builds de Deadlock")
+		locale        = flag.String("locale", "es_ES", "idioma de Data Dragon")
+		offline       = flag.Bool("offline", false, "no acceder a la red: solo caché y fixtures")
+		refresh       = flag.Bool("refresh", false, "invalidar la caché estática antes de arrancar")
+		showVersion   = flag.Bool("version", false, "mostrar la versión y salir")
+		noUpdateCheck = flag.Bool("no-update-check", false, "no comprobar si hay una versión nueva")
 	)
 	// Añade la versión al texto de --help y acepta -version además de
 	// --version (flag ya trata ambos guiones por igual).
@@ -140,6 +142,27 @@ func main() {
 		RunsLoaders: map[model.Game]ui.RunsLoader{
 			model.GameDeadlock: runsLoader,
 		},
+	}
+
+	// Comprobación de versión: desactivada por -no-update-check o por
+	// -offline. Reutiliza la caché de la app con TTL de 24 h, así que
+	// tampoco repite peticiones ni envenena la caché de builds.
+	if !*noUpdateCheck && !*offline {
+		uc := &updatecheck.Client{
+			Cache:   c,
+			Current: version.Get().Version,
+			TTL:     updatecheck.DefaultTTL,
+			Timeout: updatecheck.DefaultTimeout,
+		}
+		loader.UpdateCheck = func(ctx context.Context) (ui.UpdateInfo, error) {
+			// El contexto acota; el cliente ya aplica su propio timeout.
+			_ = ctx
+			res, err := uc.Check(ctx)
+			if err != nil || !res.Update {
+				return ui.UpdateInfo{}, err
+			}
+			return ui.UpdateInfo{Version: res.Latest, URL: res.URL}, nil
+		}
 	}
 
 	p := tea.NewProgram(ui.NewApp(loader),
