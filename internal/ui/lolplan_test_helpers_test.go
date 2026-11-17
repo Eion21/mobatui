@@ -9,6 +9,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"net/http"
@@ -271,4 +272,17 @@ func relLum(hex string) float64 {
 		}
 	}
 	return 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]
+}
+
+// waitZone espera a que bubblezone registre una zona. `Scan` es
+// ASÍNCRONO: entrega la información por un canal a un worker en otra
+// goroutine, así que una lectura inmediata puede no verla todavía.
+func waitZone(id string) bool {
+	for i := 0; i < 200; i++ {
+		if z := zoneMgr.Get(id); !z.IsZero() {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
 }

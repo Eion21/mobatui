@@ -1146,8 +1146,13 @@ func (d detailView) tabsView() string {
 	}
 	barWidth += (len(names) - 1) * len([]rune(sep))
 	if barWidth+2 > d.width-4 {
+		// Barra compacta: no caben todas, pero la pestaña activa sigue
+		// siendo clicable. Sin el Mark no se registraba ninguna zona y
+		// el clic dejaba de funcionar en terminales estrechas (en
+		// Windows el alto por defecto de la ventana de CI es menor).
 		label := fmt.Sprintf("%d/%d %s", d.tab+1, len(names), shortTabName(names[d.tab]))
-		return lipgloss.NewStyle().Padding(0, 1).Render(tabOn.Render(label))
+		marked := zoneMgr.Mark(fmt.Sprintf("tab:%d", d.tab), tabOn.Render(label))
+		return lipgloss.NewStyle().Padding(0, 1).Render(marked)
 	}
 	parts := make([]string, 0, len(names))
 	for i, name := range names {

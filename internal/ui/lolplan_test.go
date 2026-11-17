@@ -952,3 +952,40 @@ func TestHabilidadesConSecuenciaValida(t *testing.T) {
 		t.Errorf("debe dibujar la rejilla de niveles: %q", view)
 	}
 }
+
+// TestBarraCompactaRegistraZona: en terminales estrechas la barra de
+// pestañas se compacta a solo la activa. Debe seguir siendo clicable.
+//
+// Regresión del CI de Windows: la rama compacta retornaba el texto sin
+// `zoneMgr.Mark`, así que no se registraba NINGUNA zona y el clic en
+// pestañas dejaba de funcionar. `TestClicEnPestanaYTarjeta` fallaba con
+// "zona tab:1 no registrada" cuando el terminal era más estrecho.
+func TestBarraCompactaRegistraZona(t *testing.T) {
+	for _, width := range []int{40, 50, 60} {
+		d := planDetailView(t, "kaisa", "Kai'Sa", width, 40)
+		// Las zonas se registran al renderizar (View), no al sincronizar.
+		_ = d.View()
+		// La pestaña activa siempre debe ser clicable.
+		active := "tab:" + string(rune('0'+d.tab))
+		if !waitZone(active) {
+			t.Errorf("a %d columnas no se registró la zona %q", width, active)
+		}
+	}
+}
+
+// TestBarraCompletaRegistraTodas: con ancho suficiente las siete
+// pestañas son clicables.
+func TestBarraCompletaRegistraTodas(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 45)
+	// Las zonas se registran al renderizar (View), no al sincronizar.
+	v := d.View()
+	if v == "" {
+		t.Fatal("la vista quedó vacía")
+	}
+	for i := range d.tabs() {
+		id := "tab:" + string(rune('0'+i))
+		if !waitZone(id) {
+			t.Errorf("no se registró la zona %q", id)
+		}
+	}
+}
