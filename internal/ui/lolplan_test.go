@@ -989,3 +989,18 @@ func TestBarraCompletaRegistraTodas(t *testing.T) {
 		}
 	}
 }
+
+// TestWaitZoneEsperaLaCondicion: el helper no es un no-op. Devuelve
+// false para una zona que no existe (sin colgarse) y true para una real
+// solo después de que el worker la registre.
+func TestWaitZoneEsperaLaCondicion(t *testing.T) {
+	if waitZone("zona-que-no-existe-jamas") {
+		t.Fatal("no debe encontrar una zona inexistente")
+	}
+	d := planDetailView(t, "kaisa", "Kai'Sa", 120, 45)
+	_ = d.View()
+	// Puede estar ya o llegar en breve; waitZone cubre ambos casos.
+	if !waitZone("tab:3") {
+		t.Fatal("la zona de una pestaña real debía aparecer")
+	}
+}

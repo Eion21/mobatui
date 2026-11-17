@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,11 +127,18 @@ func TestClicEnPestanaYTarjeta(t *testing.T) {
 	d.width, d.height = 120, 50
 	_ = d.View() // registra las zonas en zoneMgr
 	// Clic en la pestaña 2 (Runas).
+	//
+	// Las zonas llegan ASÍNCRONAMENTE: `Scan` encola cada zona en un canal
+	// y las registra un worker en otra goroutine, así que una lectura
+	// inmediata puede no verlas todavía. En Linux el worker casi siempre
+	// gana; en Windows (y con la máquina cargada) no, y esto fallaba en
+	// CI con "zona "tab:1" no registrada". Se espera a la condición,
+	// no a un tiempo fijo.
 	click := func(id string) (int, int) {
-		z := zoneMgr.Get(id)
-		if z.IsZero() {
+		if !waitZone(id) {
 			t.Fatalf("zona %q no registrada", id)
 		}
+		z := zoneMgr.Get(id)
 		// El centro de la zona siempre cae dentro.
 		return z.StartX + (z.EndX-z.StartX)/2, z.StartY + (z.EndY-z.StartY)/2
 	}
@@ -231,6 +239,37 @@ func TestRutaEnPopupDL(t *testing.T) {
 	for _, want := range []string{"ruta #1", "posición 1–2", "patrim. ~1.2k"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("popup sin %q: %s", want, v)
+		}
+	}
+}
+
+// TestClicEnBarraCompacta: en terminales estrechas la barra muestra solo
+// la pestaña activa, pero debe seguir siendo clicable.
+//
+// Regresión de CI: la rama compacta de tabsView no marcaba la zona, así
+// que el clic dejaba de funcionar con anchos pequeños. Windows arranca
+// con una ventana más estrecha y era donde se veía.
+func TestClicEnBarraCompacta(t *testing.T) {
+	s := loadOffline(t, model.GameLoL)
+	ahri := findChampion(t, s, "Ahri")
+	for _, width := range []int{40, 50, 60} {
+		d := newDetailView(ahri, s)
+		d.width, d.height = width, 50
+		_ = d.View()
+
+		id := fmt.Sprintf("tab:%d", d.tab)
+		// Las zonas llegan de forma asíncrona: se espera la condición.
+		if !waitZone(id) {
+			t.Fatalf("ancho %d: zona %q no registrada", width, id)
+		}
+		z := zoneMgr.Get(id)
+		cx := z.StartX + (z.EndX-z.StartX)/2
+		cy := z.StartY + (z.EndY-z.StartY)/2
+		mm := tea.MouseMsg{X: cx, Y: cy, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+		// Clic sobre la pestaña activa: no cambia de pestaña, pero el clic
+		// debe resolverse (no puede caer fuera de toda zona).
+		if m := d.handleMouse(mm); m.tab != d.tab {
+			t.Errorf("ancho %d: el clic movió de la pestaña %d a %d", width, d.tab, m.tab)
 		}
 	}
 }
