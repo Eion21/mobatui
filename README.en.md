@@ -175,6 +175,11 @@ Three-item combinations (`builtBootSet3`) stay **out** of the planner: they publ
 - **Deadlock hero coverage:** The catalog includes 65 heroes; 44 have enough cached matches to generate full routes (the rest show general stats without a purchase order, and 2 in-development heroes do not yet have a published kit).
 - **Situational labels:** Derived from verifiable item properties (name and category), not causal analysis against specific heroes.
 - **LoL markup dependency:** League of Legends data is scraped from Lolalytics’ rendered HTML; changes to their site structure may require parser updates.
+- **Composed LoL route:** built from the most frequent purchase position for each slot; it does not represent a real game. With u.gg (fallback) there are no positions, so no route is built.
+- **Manual quest state in BOTTOM:** the app cannot know whether you completed the quest; `M` is a view preference.
+- **Deadlock routes and HTTP 504:** the sample API can fail temporarily. When it does, general stats are preserved and the route is retried when the hero is reopened.
+- **Kai'Sa skill sequence:** Lolalytics publishes a sequence with six points in Q and six in E, impossible with a maximum of five. That sequence is rejected and the Q > E > W priority is kept, which the source serves separately.
+- **Version notice, not self-update:** the check only reports that a newer release exists; it never downloads or replaces the binary.
 
 ---
 

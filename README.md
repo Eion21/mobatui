@@ -180,6 +180,8 @@ La tecla `M` conmuta la vista de BOTTOM entre antes y después de la misión. Es
 - **Ruta de LoL compuesta:** La ruta se construye con las posiciones de compra más frecuentes por separado; no representa una partida real. Con u.gg (respaldo) no hay posiciones y no se reconstruye ruta.
 - **Estado de misión manual en BOTTOM:** La app no puede conocer si completaste la misión; `M` es una preferencia de vista para alternar antes/después.
 - **Aviso de versión, no autoactualización:** La comprobación solo informa de que existe una release nueva; nunca descarga ni reemplaza el binario.
+- **Rutas de Deadlock y HTTP 504:** la API de muestras puede devolver error temporal. En ese caso se conservan las estadísticas generales y la ruta se reintenta al reabrir el héroe.
+- **Secuencia de habilidades de Kai'Sa:** Lolalytics publica una secuencia con seis puntos en Q y seis en E, imposible con el máximo de cinco. Se rechaza esa secuencia y se conserva la prioridad Q > E > W, que la fuente sirve aparte.
 
 ---
 
