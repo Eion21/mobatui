@@ -1,0 +1,54 @@
+{
+  "kaisa": {
+    "champion_id": 145,
+    "champion_name": "Kai'Sa",
+    "role": "bottom",
+    "patch": "16.22",
+    "skillorder_id": 123114131133433,
+    "skillorder_n": 55453,
+    "skillorder_wr": 57.21,
+    "skillpriority": "QEW",
+    "skillpriority_n": 479594,
+    "skillpriority_wr": 52.18,
+    "note": "secuencia por nivel INVÁLIDA: Q=6 y E=6 con tope 5"
+  },
+  "ahri": {
+    "champion_id": 103,
+    "champion_name": "Ahri",
+    "role": "top",
+    "patch": "16.22",
+    "skillorder_id": 213114121242233,
+    "skillorder_n": 3133,
+    "skillorder_wr": 52.5,
+    "skillpriority": "QWE",
+    "skillpriority_n": 6357,
+    "skillpriority_wr": 51.9,
+    "note": "secuencia por nivel válida"
+  },
+  "malphite": {
+    "champion_id": 54,
+    "champion_name": "Malphite",
+    "role": "top",
+    "patch": "16.22",
+    "skillorder_id": 132114131343322,
+    "skillorder_n": 42698,
+    "skillorder_wr": 53.38,
+    "skillpriority": "QEW",
+    "skillpriority_n": 101367,
+    "skillpriority_wr": 52.8,
+    "note": "secuencia por nivel válida"
+  },
+  "soraka": {
+    "champion_id": 16,
+    "champion_name": "Soraka",
+    "role": "support",
+    "patch": "16.22",
+    "skillorder_id": 123224212141133,
+    "skillorder_n": 10569,
+    "skillorder_wr": 52.62,
+    "skillpriority": "WQE",
+    "skillpriority_n": 81504,
+    "skillpriority_wr": 52.1,
+    "note": "secuencia por nivel válida"
+  }
+}

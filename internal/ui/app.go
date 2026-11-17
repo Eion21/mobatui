@@ -23,6 +23,8 @@ import (
 	"github.com/Eion21/mobatui/internal/deadlock"
 	"github.com/Eion21/mobatui/internal/game"
 	"github.com/Eion21/mobatui/internal/imgrender"
+	"github.com/Eion21/mobatui/internal/lolbuild"
+	"github.com/Eion21/mobatui/internal/lolitems"
 	"github.com/Eion21/mobatui/internal/model"
 	"github.com/Eion21/mobatui/internal/procmon"
 	"github.com/Eion21/mobatui/internal/staticdata"
@@ -125,6 +127,9 @@ type Session struct {
 	Routes map[string][]RouteStep
 	// Runs trae la ruta bajo demanda; nil = sin datos de ruta.
 	Runs RunsLoader
+	// RouteWhy guarda por héroe la razón de la ausencia de ruta, para
+	// no mostrar el mismo mensaje genérico a causas distintas.
+	RouteWhy map[string]routeReason
 	// Hybrids guarda la build híbrida por héroe (carga bajo demanda).
 	// nil = en curso; ausente = no pedida; presente = calculada.
 	Hybrids map[string]*HybridBuildView
@@ -143,6 +148,16 @@ type Session struct {
 	// Omitted son los héroes/campeones descartados por datos
 	// corruptos o sin asset: se muestran en la barra de estado.
 	Omitted int
+	// ItemCatalog es el catálogo de objetos de LoL con metadatos
+	// (Data Dragon). nil = no disponible (Deadlock o sin datos).
+	ItemCatalog map[int]lolitems.Item
+	// botMissionDone recuerda si el usuario consultó el inventario de
+	// BOT como "después de misión". Es una PREFERENCIA DE VISTA: nunca
+	// se deduce el estado real de la partida.
+	botMissionDone bool
+	// lolPlans cachea los planes ya calculados por (campeón, rol,
+	// parche, misión) para no recalcular en cada frame.
+	lolPlans map[lolPlanKey]*lolbuild.Plan
 }
 
 // renderItemArt pre-renderiza el icono de un ítem si no existe.
@@ -224,6 +239,10 @@ type Loader struct {
 	// RunsLoaders trae la ruta de compra bajo demanda por juego
 	// (Deadlock); nil = sin datos de ruta.
 	RunsLoaders map[model.Game]RunsLoader
+	// UpdateCheck, si no es nil, comprueba si hay una versión más
+	// reciente. Se ejecuta UNA vez por arranque en segundo plano; nil =
+	// comprobación desactivada (-no-update-check, config u offline).
+	UpdateCheck func(context.Context) (UpdateInfo, error)
 }
 
 // loadBuilds resuelve la fuente de builds crudos de un juego.
@@ -296,6 +315,16 @@ func LoadSession(g model.Game, l Loader) (*Session, error) {
 		// fuente los trae.
 		if dp, ok := p.(staticdata.ItemDetailsProvider); ok {
 			s.ItemMeta, _ = dp.ItemDetails()
+		}
+		// Catálogo de objetos con metadatos (LoL): alimenta el
+		// planificador de rutas. Reutiliza la MISMA caché de Data
+		// Dragon que Items(), así que no añade peticiones.
+		if ic, ok := p.(interface {
+			ItemCatalog() (map[int]lolitems.Item, error)
+		}); ok {
+			if cat, err := ic.ItemCatalog(); err == nil && len(cat) > 0 {
+				s.ItemCatalog = cat
+			}
 		}
 		// Origen de los datos, para no servir datos viejos en silencio.
 		if fp, ok := p.(staticdata.FreshnessProvider); ok {
@@ -467,6 +496,44 @@ type App struct {
 	monCh         chan procmon.Event
 	detected      model.Game // juego activo según el monitor ("" = ninguno)
 	detectedChamp string     // personaje detectado en el juego activo
+	// update es la actualización disponible, si la comprobación en
+	// segundo plano encontró una versión superior. nil = sin aviso.
+	update *UpdateInfo
+	// updateChecked evita repetir la comprobación en cada re-entrada.
+	updateChecked bool
+}
+
+// UpdateInfo describe una versión más reciente publicada.
+type UpdateInfo struct {
+	Version string // "0.2.1"
+	URL     string // enlace oficial, ya validado; "" = sin abrir
+}
+
+// updateAvailableMsg llega cuando la comprobación en segundo plano
+// termina. Update=false significa "sin novedades o sin datos".
+type updateAvailableMsg struct {
+	Info   UpdateInfo
+	Update bool
+}
+
+// checkUpdateCmd lanza la comprobación en una goroutine de Bubble Tea:
+// no bloquea la primera pantalla.
+func checkUpdateCmd(fn func(context.Context) (UpdateInfo, error)) tea.Cmd {
+	return func() tea.Msg {
+		if fn == nil {
+			return updateAvailableMsg{}
+		}
+		// El timeout real vive en updatecheck; el contexto permite
+		// cancelar si la app se cierra antes.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		info, err := fn(ctx)
+		if err != nil || info.Version == "" {
+			// Silencio: un fallo de red nunca es asunto del usuario.
+			return updateAvailableMsg{}
+		}
+		return updateAvailableMsg{Info: info, Update: true}
+	}
 }
 
 func NewApp(loader Loader) App {
@@ -499,11 +566,19 @@ func NewApp(loader Loader) App {
 // ─── atajos y ayuda ────────────────────────────────────────────────
 
 var (
-	keyOpen    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "abrir"))
-	keyDetail  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "detalle"))
-	keyNav     = key.NewBinding(key.WithKeys("up", "down", "left", "right", "k", "j", "h", "l"), key.WithHelp("←↑↓→ hjkl", "tarjeta"))
-	keyFilter  = key.NewBinding(key.WithKeys("/"), key.WithHelp("escribe", "filtrar"))
-	keyTab     = key.NewBinding(key.WithKeys("tab", "1", "2", "3"), key.WithHelp("tab/1-3", "pestaña"))
+	keyOpen   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "abrir"))
+	keyDetail = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "detalle"))
+	keyNav    = key.NewBinding(key.WithKeys("up", "down", "left", "right", "k", "j", "h", "l"), key.WithHelp("←↑↓→ hjkl", "tarjeta"))
+	keyFilter = key.NewBinding(key.WithKeys("/"), key.WithHelp("escribe", "filtrar"))
+	// Siete pestañas en LoL (cuatro en Deadlock): la ayuda ya no puede
+	// decir "1-3". El binding base cubre las cuatro de Deadlock; LoL usa
+	// keyTabLol para anunciar el rango correcto.
+	keyTab = key.NewBinding(
+		key.WithKeys("tab", "1", "2", "3", "4"),
+		key.WithHelp("tab/1-4", "pestaña"))
+	keyTabLol = key.NewBinding(
+		key.WithKeys("tab", "1", "2", "3", "4", "5", "6", "7"),
+		key.WithHelp("tab/1-7", "pestaña"))
 	keyRole    = key.NewBinding(key.WithKeys("r", "R", "[", "]"), key.WithHelp("r/R", "rol"))
 	keyArt     = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "retrato"))
 	keyHelp    = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "ayuda"))
@@ -515,6 +590,8 @@ var (
 	keySort    = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "orden"))
 	keyPick    = key.NewBinding(key.WithKeys("left", "right", "up", "down"), key.WithHelp("←→", "elegir"))
 	keyListNav = key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "navegar"))
+	// M conmuta el inventario de BOTTOM antes/después de la misión.
+	keyMission = key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "misión"))
 )
 
 // shortHelp devuelve los atajos útiles según pantalla y pestaña: nada
@@ -526,7 +603,17 @@ func (a App) shortHelp() []key.Binding {
 	case screenList:
 		return []key.Binding{keyListNav, keyDetail, keyFilter, keyMonitor, keySort, keyGame, keyHelp, keyQuit}
 	case screenDetail:
-		base := []key.Binding{keyTab, keyRole, keyHelp, keyBack}
+		tabKey := keyTab
+		if a.detail.session != nil && a.detail.session.Game == model.GameLoL {
+			tabKey = keyTabLol
+		}
+		base := []key.Binding{tabKey, keyRole, keyHelp, keyBack}
+		// La tecla de misión solo tiene efecto en BOTTOM de LoL.
+		if a.detail.session != nil && a.detail.session.Game == model.GameLoL {
+			if cb := a.detail.CurrentBuild(); cb != nil && cb.Role == model.RoleBottom {
+				base = []key.Binding{keyTab, keyMission, keyRole, keyHelp, keyBack}
+			}
+		}
 		if a.detail.tab == 0 {
 			return append([]key.Binding{keyNav, keyDetail}, base...)
 		}
@@ -597,6 +684,17 @@ func (a App) startLoad(g model.Game) (App, tea.Cmd) {
 }
 
 func (a App) Init() tea.Cmd {
+	// Comprobación de versión: una sola vez por arranque y en paralelo
+	// con el resto. Si no hay comprobador (opt-out, offline o -no-update-check)
+	// no se lanza nada.
+	if !a.updateChecked && a.loader.UpdateCheck != nil && !a.cfg.UpdateCheckOff {
+		a.updateChecked = true
+		var cmds []tea.Cmd
+		if !a.cfg.MonitorOff {
+			cmds = append(cmds, a.startMonitor())
+		}
+		return tea.Batch(append(cmds, checkUpdateCmd(a.loader.UpdateCheck))...)
+	}
 	if a.cfg.MonitorOff {
 		return nil
 	}
@@ -704,6 +802,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case monStoppedMsg:
 		return a, nil
 
+	case updateAvailableMsg:
+		// Aviso discreto y persistente: se guarda en el estado y el
+		// usuario lo descarta con "u" o al abrirlo. Nunca interrumpe.
+		if m.Update {
+			a.update = &m.Info
+		}
+		return a, nil
+
 	case toastMsg:
 		a.toast, a.toastID = m.text, m.id
 		return a, nil
@@ -732,8 +838,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.session.Routes == nil {
 			a.session.Routes = map[string][]RouteStep{}
 		}
-		if m.Err != nil || len(m.Steps) == 0 {
+		if a.session.RouteWhy == nil {
+			a.session.RouteWhy = map[string]routeReason{}
+		}
+		if m.Err != nil {
 			a.session.Routes[m.ChampKey] = []RouteStep{}
+			a.session.RouteWhy[m.ChampKey] = classifyRunsError(m.Err)
+		} else if len(m.Steps) == 0 {
+			a.session.Routes[m.ChampKey] = []RouteStep{}
+			a.session.RouteWhy[m.ChampKey] = routeReasonNoSample
 		} else {
 			a.session.Routes[m.ChampKey] = m.Steps
 		}
@@ -830,6 +943,29 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				cmd := a.startMonitor()
 				return a, tea.Batch(cmd, toastCmd("Monitor de juegos: activo"))
+			}
+		case "v":
+			// Aviso de versión: "v" abre el release (si hay enlace
+			// validado) y lo descarta. Es una tecla libre en todas las
+			// pantallas; "esc" se reserva para navegar/volver y "u" ya
+			// pliega mejoras en Deadlock.
+			if a.update != nil {
+				url := a.update.URL
+				a.update = nil
+				if url != "" {
+					if err := openURL(url); err != nil {
+						return a, toastCmd("No se pudo abrir el enlace")
+					}
+					return a, toastCmd("Abriendo GitHub Releases…")
+				}
+				return a, toastCmd("Aviso descartado")
+			}
+		case "V":
+			// Mayúscula: descarta sin abrir nada (útil cuando el
+			// navegador no está disponible).
+			if a.update != nil {
+				a.update = nil
+				return a, toastCmd("Aviso descartado")
 			}
 		case "ctrl+c":
 			if a.monStop != nil {
@@ -967,8 +1103,15 @@ func runsCmdFor(a App) tea.Cmd {
 	if a.session.Routes == nil {
 		a.session.Routes = map[string][]RouteStep{}
 	}
-	if _, ok := a.session.Routes[key]; ok {
-		return nil // ya cargadas o en curso
+	if steps, ok := a.session.Routes[key]; ok {
+		// Un fallo de FUENTE no es un veredicto sobre los datos: se
+		// reintenta al reabrir el héroe en vez de dejar la sesión
+		// marcada como "sin ruta" por un timeout pasajero.
+		if len(steps) > 0 || a.session.RouteWhy[key] != routeReasonSource {
+			return nil // ya cargadas, en curso, o sin muestra real
+		}
+		delete(a.session.Routes, key)
+		delete(a.session.RouteWhy, key)
 	}
 	a.session.Routes[key] = nil // marca "en curso" hasta que llegue el msg
 	return loadRunsCmd(a.session.Runs, key)
@@ -1187,11 +1330,22 @@ func (a App) footer() string {
 	if a.detected != "" {
 		detected = stValue.Render("● " + a.detected.DisplayName() + " en juego ")
 	}
+	// Aviso de versión: discreto y persistente hasta que se descarte.
+	updatePart := ""
+	if a.update != nil {
+		label := fmt.Sprintf("Nueva versión: v%s · GitHub Releases ", a.update.Version)
+		action := "· V descartar "
+		if a.update.URL != "" {
+			action = "· v abrir · V descartar "
+		}
+		updatePart = stWinrateBad.Render(label) + stDim.Render(action)
+	}
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		stStatusBar.Render(a.status),
 		" ",
 		detected,
 		toastPart,
+		updatePart,
 		a.help.ShortHelpView(a.shortHelp()))
 }
 

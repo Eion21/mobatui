@@ -39,6 +39,7 @@ Built in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [L
 - **Visible confidence:** *High / moderate / low* labels based on sample size and uncertainty — never presented as a “win probability”.
 - **Truecolor terminal art:** Item icons and hero/champion portraits rendered directly in the console.
 - **Works offline:** On-disk cache with TTL, controlled stale-if-error degradation, and fallback to bundled fixtures.
+- **Identifiable:** `mobatui --version` reports version, commit, Go and platform. On startup it notifies when a newer GitHub release exists (non-blocking, no self-update); disable with `-no-update-check` or `-offline`.
 - **Match monitor (`m`):** Automatically detects when the game is running and, in League of Legends, identifies your active champion in real time via the *Live Client Data API*.
 
 ### Deadlock (via [deadlock-api.com](https://deadlock-api.com))
@@ -79,8 +80,10 @@ Cache is stored in the user cache directory (defaults to `~/.cache/mobatui` on L
 
 | Flag | Default | Description |
 | --- | --- | --- |
+| `-version` / `--version` | — | Print version, commit, Go and platform, then exit without touching cache or network |
 | `-data` | `~/.cache/mobatui` | Runtime cache directory |
-| `-offline` | `false` | Offline mode: use only local cache and fixtures |
+| `-offline` | `false` | Offline mode: use only local cache and fixtures (also disables the version notice) |
+| `-no-update-check` | `false` | Do not check GitHub for a newer version |
 | `-refresh` | `false` | Invalidate static cache before starting |
 | `-locale` | `es_ES` | Data Dragon locale for League of Legends |
 | `-ugg` | `testdata/ugg` | u.gg data/dumps directory |
@@ -100,7 +103,9 @@ Cache is stored in the user cache directory (defaults to `~/.cache/mobatui` on L
 | `1`-`4` / `1`-`5` | Jump directly to a tab (`Items`, `Summary`, `Matchups`, `Abilities`) |
 | `←↑↓→`, `hjkl` | Move selection across cards or rows |
 | `r` / `R` | Force refresh (or rotate role forward/backward in detail view) |
-| `u` | Collapse or expand upgrade cards |
+| `u` | Collapse or expand upgrade cards (Deadlock) |
+| `M` | Toggle the BOTTOM inventory between before and after the quest |
+| `v` / `V` | Open the new release in the browser / dismiss the notice |
 | `a` | Change portrait mode |
 | `m` | Toggle the match monitor |
 | `?` | Show/hide shortcut help |
@@ -130,6 +135,32 @@ The generator is deliberately conservative about what it claims:
 
 > **Note on Win Rate:** A high win rate is **not** interpreted as causation. Expensive items bought when a team is already ahead have inflated win rates; the system corrects for this bias instead of rewarding it.
 
+### Suggested route and alternatives (League of Legends)
+
+The **`Ruta`** tab shows purchase order and the final inventory; **`Alt.`** groups candidates by function.
+
+> **Important — composed route, not an observed sequence.** Lolalytics publishes `item1..item5` as *independent purchase positions*: "what is bought first", "what is bought second", and so on. Each step is the most frequent item in that position, but **the resulting route is not the sequence of any real game**. It is therefore labelled *"based on observed purchases"*.
+
+Three-item combinations (`builtBootSet3`) stay **out** of the planner: they publish the same set in several permutations and their semantics are unproven, so they are never used to infer order.
+
+**Inventory and quest rules (2026 season):**
+
+| Role | Quest slot | Effect |
+| --- | --- | --- |
+| BOTTOM | Boots | Before completion boots take a main slot; afterwards they move to the quest slot and 6 main slots remain |
+| SUPPORT | Control wards | Support item and boots take main slots; it does **not** inherit BOTTOM's boots slot |
+| MID | — | The quest upgrades Tier 2 boots to Tier 3 but frees no slot |
+| TOP / JUNGLE | — | Normal 6-slot inventory |
+
+`M` toggles the BOTTOM view between before and after the quest. It is a **view preference**: the app never infers the real game state. When evidence for the sixth item is missing, the plan is declared **incomplete** with the reason instead of inventing it.
+
+### Sources and fallback
+
+- **Lolalytics** is the primary source: purchase positions, boots, combinations and summoner spells.
+- **u.gg** is the fallback when Lolalytics is unavailable. It **publishes no per-position tables**, so no route is reconstructed: available stats are shown and the reason is stated.
+- An incomplete catalog and a mismatched patch are reported separately: *"incompatible patch"* (no catalog id matches) versus *"N items are missing from the catalog"* (isolated absent ids).
+- Support quest items are identified by id and marked as such: **no purchase minute is invented for them**.
+
 ### Confidence levels
 
 - **High:** Large sample, narrow uncertainty interval, and consistent data.
@@ -144,6 +175,11 @@ The generator is deliberately conservative about what it claims:
 - **Deadlock hero coverage:** The catalog includes 65 heroes; 44 have enough cached matches to generate full routes (the rest show general stats without a purchase order, and 2 in-development heroes do not yet have a published kit).
 - **Situational labels:** Derived from verifiable item properties (name and category), not causal analysis against specific heroes.
 - **LoL markup dependency:** League of Legends data is scraped from Lolalytics’ rendered HTML; changes to their site structure may require parser updates.
+- **Composed LoL route:** built from the most frequent purchase position for each slot; it does not represent a real game. With u.gg (fallback) there are no positions, so no route is built.
+- **Manual quest state in BOTTOM:** the app cannot know whether you completed the quest; `M` is a view preference.
+- **Deadlock routes and HTTP 504:** the sample API can fail temporarily. When it does, general stats are preserved and the route is retried when the hero is reopened.
+- **Kai'Sa skill sequence:** Lolalytics publishes a sequence with six points in Q and six in E, impossible with a maximum of five. That sequence is rejected and the Q > E > W priority is kept, which the source serves separately.
+- **Version notice, not self-update:** the check only reports that a newer release exists; it never downloads or replaces the binary.
 
 ---
 

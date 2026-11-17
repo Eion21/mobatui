@@ -11,6 +11,12 @@ builds:
     binary: mobatui
     env:
       - CGO_ENABLED=0
+    # {{.Version}} ya viene sin la "v" del tag. Inyectarla hace que
+    # `mobatui --version` anuncie la versión real aunque los metadatos
+    # VCS del build digan "+dirty".
+    ldflags:
+      - -s -w
+      - -X github.com/Eion21/mobatui/internal/version.injected={{ .Version }}
     goos:
       - linux
       - darwin

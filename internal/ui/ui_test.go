@@ -251,7 +251,7 @@ func TestDetailViewRenderLoL(t *testing.T) {
 	// Cabecera + pestañas + pestaña ítems por defecto.
 	for _, want := range []string{
 		"Ahri", "MIDDLE", "SUPPORT",
-		"1 Ítems", "2 Resumen", "3 Runas", "4 Habilidades",
+		"1 Ítems", "2 Ruta", "3 Alt.", "4 Resumen", "5 Runas", "6 Habil.",
 		"CORE", "max", "WR",
 		// La línea de selección muestra el nombre completo del ítem
 		// top (las tarjetas truncan). El core son los 3 más comprados,
@@ -269,7 +269,7 @@ func TestDetailViewRenderLoL(t *testing.T) {
 		t.Error("la vista mostró un ID sin resolver (Ítem NNNN)")
 	}
 	// Pestaña runas: keystone protagonista y árboles.
-	m, _ := d.Update(keyMsg("3"))
+	m, _ := d.Update(keyMsg("5"))
 	v = m.View()
 	for _, want := range []string{"Electrocutar", "Dominación", "Brujería", "fragmentos"} {
 		if !strings.Contains(v, want) {
@@ -277,7 +277,7 @@ func TestDetailViewRenderLoL(t *testing.T) {
 		}
 	}
 	// Pestaña habilidades: rejilla con marcas y niveles.
-	m, _ = m.Update(keyMsg("4"))
+	m, _ = m.Update(keyMsg("6"))
 	v = m.View()
 	for _, want := range []string{"◆", "max", "18"} {
 		if !strings.Contains(v, want) {
@@ -287,7 +287,7 @@ func TestDetailViewRenderLoL(t *testing.T) {
 	// Pestaña resumen: lo jugable en una pantalla. La fuente de los
 	// fixtures (UGG) no trae hechizos ni orden de compra: esas
 	// secciones no se dibujan.
-	m, _ = m.Update(keyMsg("2"))
+	m, _ = m.Update(keyMsg("4"))
 	v = m.View()
 	for _, want := range []string{"RUNA CLAVE", "BOTAS", "HABILIDADES"} {
 		if !strings.Contains(v, want) {
@@ -331,7 +331,7 @@ func TestDetailViewRenderDeadlock(t *testing.T) {
 	}
 	// Pestaña matchups con fixtures: sin datos, estado vacío claro.
 	m, _ := d.Update(keyMsg("3"))
-	if v := m.View(); !strings.Contains(v, "sin datos de matchups") {
+	if v := m.View(); !strings.Contains(v, "no publica enfrentamientos") {
 		t.Error("la pestaña matchups no mostró estado vacío con fixtures")
 	}
 	// Pestaña habilidades: rejilla con los slots del héroe.

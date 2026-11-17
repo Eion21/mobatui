@@ -169,6 +169,11 @@ type RunePageStats struct {
 // 1..N según las reglas del juego ("QWEQQR…" o "121314…").
 type SkillSequenceStats struct {
 	Sequence string
+	// Priority es el orden de maximización que publica la fuente
+	// ("QEW" = Q antes que E antes que W). Es INDEPENDIENTE de la
+	// secuencia: Lolalytics lo sirve aparte y es válido aunque la
+	// secuencia por nivel no lo sea.
+	Priority string
 	Stats
 }
 

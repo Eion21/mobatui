@@ -14,6 +14,7 @@ import (
 
 	"github.com/Eion21/mobatui/internal/clean"
 	"github.com/Eion21/mobatui/internal/config"
+	"github.com/Eion21/mobatui/internal/lolbuild"
 	"github.com/Eion21/mobatui/internal/model"
 )
 
@@ -98,7 +99,25 @@ func (d detailView) tabs() []string {
 	if d.session.Game == model.GameDeadlock {
 		return []string{"Ítems", "Resumen", "Matchups", "Habilidades"}
 	}
-	return []string{"Ítems", "Resumen", "Runas", "Habilidades", "Matchups"}
+	// Nombres cortos: siete pestañas deben caber en 80 columnas junto
+	// con su número. El nombre largo va en el contenido de la vista.
+	return []string{"Ítems", "Ruta", "Alt.", "Resumen", "Runas", "Habil.", "Match."}
+}
+
+// lolPlan devuelve el plan de build del campeón/rol actual, o nil si no
+// hay datos para construirlo. El cálculo está cacheado en la sesión por
+// (campeón, rol, parche, misión), así que llamarlo desde el render no
+// recalcula nada.
+func (d detailView) lolPlan() *lolbuild.Plan {
+	if d.session == nil || d.session.Game != model.GameLoL || d.champ == nil {
+		return nil
+	}
+	cb := d.CurrentBuild()
+	if cb == nil {
+		return nil
+	}
+	mission := d.session.MissionStateFor(cb.Role)
+	return d.session.LolPlan(cb, d.champ.Key, cb.Role, mission)
 }
 
 // cardW leaves enough space for readable Deadlock names and purchase cues.
@@ -233,12 +252,25 @@ func (d detailView) Update(msg tea.Msg) (detailView, tea.Cmd) {
 		d.tab = (d.tab - 1 + len(tabs)) % len(tabs)
 		d.clampSel()
 		d.vp.GotoTop()
-	case "1", "2", "3", "4", "5":
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if idx := int(km.String()[0] - '1'); idx < len(tabs) {
 			d.tab = idx
 			d.clampSel()
 			d.vp.GotoTop()
 		}
+	case "M":
+		// Estado de misión de BOT (antes/después). Es una preferencia
+		// de VISTA: no se deduce el estado real de la partida. Solo
+		// aplica donde la misión cambia el inventario (BOT).
+		cb := d.CurrentBuild()
+		if cb == nil || !d.session.ToggleBotMission(cb.Role) {
+			break
+		}
+		d.sync()
+		if d.session.botMissionDone {
+			return d, toastCmd("BOT: después de la misión")
+		}
+		return d, toastCmd("BOT: antes de la misión")
 	case "a":
 		d.artMode = (d.artMode + 1) % 3
 		d.sync()
@@ -976,11 +1008,16 @@ func (d detailView) headerView() string {
 		// desreferenciar nil.
 		metrics = stDim.Render("sin datos para los roles de este juego")
 	} else {
-		metrics = lipgloss.JoinHorizontal(lipgloss.Top,
-			stDim.Render("Patch "+b.Patch+" · "+nThousand(b.Total.Games)+" partidas · "),
-			wrStyle(b.WinRate, b.Total.Games).Render("WR "+pct(b.WinRate)),
-			stDim.Render("  ·  "), d.priorityLine(),
-		)
+		// El separador final solo se dibuja si hay prioridad de
+		// habilidades: sin ella quedaba un "·" colgando al final.
+		parts := []string{
+			stDim.Render("Patch " + b.Patch + " · " + nThousand(b.Total.Games) + " partidas · "),
+			wrStyle(b.WinRate, b.Total.Games).Render("WR " + pct(b.WinRate)),
+		}
+		if prio := d.priorityLine(); prio != "" {
+			parts = append(parts, stDim.Render("  ·  "), prio)
+		}
+		metrics = lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	}
 	// Las métricas envuelven por palabras para no desbordar en
 	// terminales estrechas. El retrato mini se come 15 columnas.
@@ -1100,7 +1137,24 @@ func (d detailView) tabsView() string {
 			}
 		}
 	}
-	parts := make([]string, 0, 5)
+	// Última reserva para terminales muy estrechas: si aun abreviado no
+	// cabe, se muestra solo la pestaña activa con su posición. Nunca se
+	// desborda el ancho (la TUI debe funcionar en terminales pequeñas).
+	barWidth := 0
+	for i, name := range names {
+		barWidth += len([]rune(fmt.Sprintf("%d %s", i+1, name)))
+	}
+	barWidth += (len(names) - 1) * len([]rune(sep))
+	if barWidth+2 > d.width-4 {
+		// Barra compacta: no caben todas, pero la pestaña activa sigue
+		// siendo clicable. Sin el Mark no se registraba ninguna zona y
+		// el clic dejaba de funcionar en terminales estrechas (en
+		// Windows el alto por defecto de la ventana de CI es menor).
+		label := fmt.Sprintf("%d/%d %s", d.tab+1, len(names), shortTabName(names[d.tab]))
+		marked := zoneMgr.Mark(fmt.Sprintf("tab:%d", d.tab), tabOn.Render(label))
+		return lipgloss.NewStyle().Padding(0, 1).Render(marked)
+	}
+	parts := make([]string, 0, len(names))
 	for i, name := range names {
 		label := fmt.Sprintf("%d %s", i+1, name)
 		var rendered string
@@ -1120,17 +1174,40 @@ func (d detailView) tabView() string {
 	if d.CurrentBuild() == nil {
 		return stDim.Render("sin datos de build para este campeón en este juego")
 	}
-	switch label := d.tabs()[d.tab]; label {
-	case "Ítems":
+	// Despacho por índice canónico. Las etiquetas se abrevian para que
+	// siete pestañas quepan en 80 columnas (`Habil.`, `Match.`), así que
+	// comparar por texto dejaba las dos últimas cayendo en el caso por
+	// defecto y mostraban la misma vista.
+	//
+	// LoL:  0 Ítems · 1 Ruta · 2 Alt. · 3 Resumen · 4 Runas · 5 Habil. · 6 Match.
+	// DL:   0 Ítems · 1 Resumen · 2 Matchups · 3 Habilidades
+	if d.session.Game == model.GameDeadlock {
+		switch d.tab {
+		case 0:
+			return d.itemsView()
+		case 1:
+			return d.resumenView()
+		case 2:
+			return d.matchupsView()
+		default:
+			return d.skillsView()
+		}
+	}
+	switch d.tab {
+	case 0:
 		return d.itemsView()
-	case "Resumen":
+	case 1:
+		return d.routeTabView()
+	case 2:
+		return d.alternativesTabView()
+	case 3:
 		return d.resumenView()
-	case "Matchups":
-		return d.matchupsView()
-	case "Runas":
+	case 4:
 		return d.runesView()
-	default:
+	case 5:
 		return d.skillsView()
+	default:
+		return d.matchupsView()
 	}
 }
 
@@ -1350,6 +1427,13 @@ func (d detailView) routeStatus() string {
 	}
 	if (requested && steps == nil) || (!requested && d.session.Runs != nil) {
 		return "Cargando ruta de compra…"
+	}
+	// La ausencia tiene causas distintas: se dice cuál en vez de un
+	// texto único. El detalle técnico queda en los logs.
+	if why, ok := d.session.RouteWhy[d.champ.Key]; ok {
+		if s := why.short(); s != "" {
+			return "Ruta no disponible (" + s + ") — mostrando estadísticas generales"
+		}
 	}
 	return "Ruta no disponible — mostrando estadísticas generales"
 }
@@ -1969,7 +2053,10 @@ const minMatchupGames = 200
 func (d detailView) matchupsView() string {
 	b := d.CurrentBuild()
 	if len(b.Matchups) == 0 && len(b.Synergies) == 0 {
-		return stDim.Render("sin datos de matchups para este héroe (la fuente no los trae)")
+		if d.session.Game == model.GameDeadlock {
+			return stDim.Render("la fuente no publica enfrentamientos para este héroe")
+		}
+		return stDim.Render("la fuente no publica enfrentamientos por campeón en este rol")
 	}
 	nameOf := d.session.Names.HeroNameByID
 	usable := func(refs []model.HeroRef) []model.HeroRef {
@@ -2071,6 +2158,50 @@ func (d detailView) runesView() string {
 	return out
 }
 
+// emptySkillsReason distingue POR QUÉ no hay rejilla de habilidades:
+// la fuente no publica órdenes, la muestra no llega al umbral, o los
+// datos existen pero la secuencia no es válida con las reglas del juego
+// (y por eso no se puede derivar la prioridad). Un mensaje único
+// "sin muestra suficiente" ocultaba casos muy distintos.
+func (d detailView) emptySkillsReason(b *model.CleanBuild) string {
+	if b == nil {
+		return "sin datos de build"
+	}
+	// ¿La fuente trajo algo? El planificador recibe la lista cruda, así
+	// que una build sin secuencia y sin prioridad viene de un descarte.
+	if b.SkillOrder.Sequence == "" && len(b.SkillOrder.Priority) == 0 {
+		if d.session.Game == model.GameDeadlock {
+			return "la fuente no publica órdenes de habilidades para este héroe"
+		}
+		return "la fuente no publica una secuencia de habilidades válida para este campeón"
+	}
+	return "sin secuencia con muestra suficiente"
+}
+
+// priorityOnlyView muestra SOLO la prioridad de habilidades cuando la
+// fuente no publica (o no valida) una secuencia por nivel. Es una
+// representación distinta y se dice explícitamente: no es una ruta de
+// subida nivel a nivel.
+func (d detailView) priorityOnlyView(b *model.CleanBuild, prio []rune) []string {
+	var out []string
+	out = append(out, stDim.Render("La fuente no publica una secuencia por nivel válida."))
+	out = append(out, stDim.Render("Se muestra solo el orden de prioridad (qué habilidad maximizar antes)."))
+	out = append(out, "")
+	parts := make([]string, 0, len(prio))
+	for i, sk := range prio {
+		parts = append(parts, skillStyle(sk).Render(slotLabel(sk, b.CanonicalSkillOrder)))
+		if i < len(prio)-1 {
+			parts = append(parts, stDim.Render(" > "))
+		}
+	}
+	out = append(out, "  "+stDim.Render("prioridad  ")+strings.Join(parts, ""))
+	if b.SkillOrder.Games > 0 {
+		out = append(out, stDim.Render(fmt.Sprintf("  muestra: %s partidas · WR %s",
+			nThousand(b.SkillOrder.Games), pct(b.SkillOrder.WinRate()))))
+	}
+	return out
+}
+
 // ─── pestaña habilidades ───────────────────────────────────────────
 
 // skillsView: rejilla habilidad × nivel con marcas ◆, prioridad y
@@ -2079,7 +2210,13 @@ func (d detailView) skillsView() string {
 	b := d.CurrentBuild()
 	seq := []rune(b.SkillOrder.Sequence)
 	if len(seq) == 0 {
-		return stDim.Render("sin secuencia con muestra suficiente")
+		// Sin secuencia por nivel, pero con prioridad de la fuente: se
+		// muestra la prioridad DECLARÁNDOLA como tal. No se dibuja una
+		// rejilla nivel a nivel que no existe.
+		if prio := b.SkillOrder.Priority; len(prio) > 0 {
+			return lipgloss.JoinVertical(lipgloss.Left, d.priorityOnlyView(b, prio)...)
+		}
+		return stDim.Render(d.emptySkillsReason(b))
 	}
 	seqWR := b.SkillOrder.WinRate()
 	head := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -2392,4 +2529,57 @@ func joinWithGap(parts []string, gap string) []string {
 		out = append(out, p)
 	}
 	return out
+}
+
+// ─── pestaña Ruta (LoL) ────────────────────────────────────────────
+
+// routeTabView: ruta sugerida + inventario final. Es una vista de
+// lectura: no añade tarjetas navegables para no complicar la selección.
+func (d detailView) routeTabView() string {
+	plan := d.lolPlan()
+	if plan == nil {
+		return stDim.Render("sin datos suficientes para construir la ruta de compra")
+	}
+	lines := d.routeViewA(plan)
+	if m := d.missionHint(); m != "" {
+		lines = append(lines, "", stDim.Render("  "+m))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, d.wrapLines(lines)...)
+}
+
+// alternativesTabView: alternativas agrupadas por función.
+func (d detailView) alternativesTabView() string {
+	plan := d.lolPlan()
+	if plan == nil {
+		return stDim.Render("sin datos suficientes para proponer alternativas")
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, d.wrapLines(d.alternativesViewB(plan))...)
+}
+
+// missionHint explica cómo cambiar el estado de misión cuando aplica.
+func (d detailView) missionHint() string {
+	cb := d.CurrentBuild()
+	if cb == nil || cb.Role != model.RoleBottom {
+		return ""
+	}
+	if d.session.botMissionDone {
+		return "mostrando BOT después de la misión · M vuelve a antes de misión"
+	}
+	return "mostrando BOT antes de la misión · M simula después de la misión"
+}
+
+// shortTabName abrevia el nombre de una pestaña para barras estrechas.
+func shortTabName(name string) string {
+	switch name {
+	case "Resumen":
+		return "Resum."
+	case "Habilidades":
+		return "Habil."
+	case "Matchups":
+		return "Match."
+	case "Alternativas":
+		return "Alt."
+	default:
+		return name
+	}
 }

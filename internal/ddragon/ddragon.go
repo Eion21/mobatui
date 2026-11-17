@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Eion21/mobatui/internal/cache"
+	"github.com/Eion21/mobatui/internal/lolitems"
 	"github.com/Eion21/mobatui/internal/staticdata"
 )
 
@@ -280,4 +281,183 @@ func (cl *Client) ItemIcon(id int) ([]byte, error) {
 	url := fmt.Sprintf("%s/cdn/%s/img/item/%d.png", cl.baseURL, v, id)
 	body, _, err := cl.getURL(url, ttlIcon)
 	return body, err
+}
+
+// ─── catálogo enriquecido (fase 3) ─────────────────────────────────
+//
+// Items() sigue devolviendo id → nombre para no romper a sus
+// consumidores. ItemCatalog() expone los metadatos completos que
+// necesita la clasificación por función, reutilizando EXACTAMENTE la
+// misma URL, caché y respaldo local: no hay peticiones nuevas.
+
+// itemJSON es la forma de un objeto en item.json. Solo se decodifican
+// los campos que usamos; el resto se ignora.
+type itemJSON struct {
+	Name          string   `json:"name"`
+	Plaintext     string   `json:"plaintext"`
+	Tags          []string `json:"tags"`
+	Into          []string `json:"into"`
+	From          []string `json:"from"`
+	InStore       *bool    `json:"inStore"`
+	Depth         int      `json:"depth"`
+	Consumable    bool     `json:"consumable"`
+	SpecialRecipe int      `json:"specialRecipe"`
+	RequiredAlly  string   `json:"requiredAlly"`
+	Gold          struct {
+		Base        int  `json:"base"`
+		Total       int  `json:"total"`
+		Sell        int  `json:"sell"`
+		Purchasable bool `json:"purchasable"`
+	} `json:"gold"`
+	Maps  map[string]bool `json:"maps"`
+	Stats struct {
+		FlatArmor          float64 `json:"FlatArmorMod"`
+		FlatSpellBlock     float64 `json:"FlatSpellBlockMod"`
+		FlatHealth         float64 `json:"FlatHPPoolMod"`
+		FlatMagicDamage    float64 `json:"FlatMagicDamageMod"`
+		FlatPhysicalDamage float64 `json:"FlatPhysicalDamageMod"`
+		FlatAttackSpeed    float64 `json:"FlatAttackSpeedMod"`
+		FlatMoveSpeed      float64 `json:"FlatMovementSpeedMod"`
+		FlatMP             float64 `json:"FlatMPPoolMod"`
+		FlatCritChance     float64 `json:"FlatCritChanceMod"`
+		PercentAttackSpeed float64 `json:"PercentAttackSpeedMod"`
+		PercentMoveSpeed   float64 `json:"PercentMovementSpeedMod"`
+		FlatMPRegen        float64 `json:"FlatMPRegenMod"`
+		FlatHPRegen        float64 `json:"FlatHPRegenMod"`
+		FlatMagicPen       float64 `json:"FlatMagicPenetrationMod"`
+		FlatArmorPen       float64 `json:"FlatArmorPenetrationMod"`
+		PercentArmorPen    float64 `json:"PercentArmorPenetrationMod"`
+		PercentMagicPen    float64 `json:"PercentMagicPenetrationMod"`
+		FlatLifeSteal      float64 `json:"FlatLifeStealMod"`
+		FlatSpellVamp      float64 `json:"FlatSpellVampMod"`
+		FlatCooldownRed    float64 `json:"FlatCooldownMod"`
+		FlatAbilityPower   float64 `json:"FlatAbilityPowerMod"`
+	} `json:"stats"`
+}
+
+// catalogFile envuelve item.json.
+type catalogFile struct {
+	Data map[string]itemJSON `json:"data"`
+}
+
+// ItemCatalog devuelve el catálogo completo de objetos con metadatos.
+//
+// Usa la misma URL que Items(), así que comparte caché y respaldo: si
+// Items() ya la descargó, esto no hace ninguna petición nueva.
+func (cl *Client) ItemCatalog() (map[int]lolitems.Item, error) {
+	v, err := cl.Version()
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/cdn/%s/data/%s/item.json", cl.baseURL, v, cl.locale)
+	body, _, err := cl.getURL(url, ttlStatic)
+	if err != nil {
+		return nil, fmt.Errorf("ddragon: catálogo de ítems: %w", err)
+	}
+	var f catalogFile
+	if err := json.Unmarshal(body, &f); err != nil {
+		return nil, fmt.Errorf("ddragon: item.json inválido: %w", err)
+	}
+	out := make(map[int]lolitems.Item, len(f.Data))
+	for key, raw := range f.Data {
+		id, err := strconv.Atoi(key)
+		if err != nil {
+			continue
+		}
+		it := lolitems.Item{
+			ID:            id,
+			Name:          raw.Name,
+			Plain:         stripTags(raw.Plaintext),
+			Tags:          raw.Tags,
+			Into:          parseIDs(raw.Into),
+			From:          parseIDs(raw.From),
+			Depth:         raw.Depth,
+			Consumable:    raw.Consumable,
+			Trinket:       containsTag(raw.Tags, "Trinket"),
+			SpecialRecipe: raw.SpecialRecipe,
+			RequiredAlly:  raw.RequiredAlly,
+			Gold: lolitems.Gold{
+				Base:        raw.Gold.Base,
+				Total:       raw.Gold.Total,
+				Sell:        raw.Gold.Sell,
+				Purchasable: raw.Gold.Purchasable,
+			},
+			Maps: map[int]bool{},
+		}
+		// inStore: si el parche no lo trae, se asume true (objetos
+		// anteriores al campo). Un false explícito manda.
+		it.InStore = true
+		if raw.InStore != nil {
+			it.InStore = *raw.InStore
+		}
+		for k, ok := range raw.Maps {
+			if n, err := strconv.Atoi(k); err == nil {
+				it.Maps[n] = ok
+			}
+		}
+		it.Stats = lolitems.Stats{
+			FlatArmor:          raw.Stats.FlatArmor,
+			FlatSpellBlock:     raw.Stats.FlatSpellBlock,
+			FlatHealth:         raw.Stats.FlatHealth,
+			FlatMagicDamage:    raw.Stats.FlatMagicDamage,
+			FlatPhysicalDamage: raw.Stats.FlatPhysicalDamage,
+			FlatAttackSpeed:    raw.Stats.FlatAttackSpeed,
+			FlatMoveSpeed:      raw.Stats.FlatMoveSpeed,
+			FlatMP:             raw.Stats.FlatMP,
+			FlatCritChance:     raw.Stats.FlatCritChance,
+			PercentAttackSpeed: raw.Stats.PercentAttackSpeed,
+			PercentMoveSpeed:   raw.Stats.PercentMoveSpeed,
+			FlatMPRegen:        raw.Stats.FlatMPRegen,
+			FlatHPRegen:        raw.Stats.FlatHPRegen,
+			FlatMagicPen:       raw.Stats.FlatMagicPen,
+			FlatArmorPen:       raw.Stats.FlatArmorPen,
+			PercentArmorPen:    raw.Stats.PercentArmorPen,
+			PercentMagicPen:    raw.Stats.PercentMagicPen,
+			FlatLifeSteal:      raw.Stats.FlatLifeSteal,
+			FlatSpellVamp:      raw.Stats.FlatSpellVamp,
+			FlatCooldownRed:    raw.Stats.FlatCooldownRed,
+			FlatAbilityPower:   raw.Stats.FlatAbilityPower,
+		}
+		out[id] = it
+	}
+	return out, nil
+}
+
+// parseIDs convierte las claves de into/from a números.
+func parseIDs(list []string) []int {
+	out := make([]int, 0, len(list))
+	for _, s := range list {
+		if n, err := strconv.Atoi(s); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func containsTag(tags []string, tag string) bool {
+	for _, t := range tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// stripTags quita el marcado simple de las descripciones de Data Dragon.
+func stripTags(s string) string {
+	var b []byte
+	inTag := false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '<':
+			inTag = true
+		case '>':
+			inTag = false
+		default:
+			if !inTag {
+				b = append(b, s[i])
+			}
+		}
+	}
+	return string(b)
 }

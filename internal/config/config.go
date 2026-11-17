@@ -19,6 +19,9 @@ type Config struct {
 	SortMode     int    `json:"sort_mode"`     // lista: WR/partidas/nombre
 	SeenHint     bool   `json:"seen_hint"`     // ya vio la pista inicial
 	MonitorOff   bool   `json:"monitor_off"`   // detector de juego desactivado
+	// UpdateCheckOff desactiva la comprobación de nuevas versiones en
+	// GitHub. Por defecto está activa (false).
+	UpdateCheckOff bool `json:"update_check_off"`
 }
 
 // path devuelve la ruta del archivo de configuración. BUILDS_CONFIG
