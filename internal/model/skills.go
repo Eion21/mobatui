@@ -21,8 +21,14 @@ func ParseSequence(s string, rules SkillRules) (string, error) {
 // ValidateSequence comprueba las reglas matemáticas del orden de
 // habilidades del juego: solo habilidades del alfabeto, tope de puntos
 // por habilidad (la longitud de la secuencia fuerza el reparto total)
-// y habilidades bloqueadas a niveles concretos (la R de LoL en
-// 6/11/16), que además solo pueden aparecer ahí.
+// y habilidades bloqueadas, cada una en un nivel MÍNIMO de desbloqueo.
+//
+// Sobre las habilidades bloqueadas (la R de LoL, que se desbloquea en
+// 6/11/16): el nivel de la lista es el PRIMER nivel en que se puede
+// subir, NO uno obligatorio. Retrasar el punto es legal — y ocurre:
+// con datos reales de Lolalytics, 1 de cada 20 secuencias de Ahri y
+// Soraka sube la segunda R en el nivel 12 en lugar del 11. Exigir el
+// nivel exacto rechazaba esas secuencias válidas.
 func ValidateSequence(seq string, rules SkillRules) error {
 	counts := map[rune]int{}
 	for _, r := range rules.Alphabet {
@@ -41,9 +47,16 @@ func ValidateSequence(seq string, rules SkillRules) error {
 			if len(lock) == 0 {
 				return fmt.Errorf("nivel %d: habilidad %q no puede subirse", lvl+1, sk)
 			}
+			// El punto N de una habilidad bloqueada no puede ir antes de
+			// su nivel de desbloqueo, pero sí después (retraso legal).
 			i := lockedIdx[sk]
-			if i >= len(lock) || lock[i] != lvl+1 {
-				return fmt.Errorf("nivel %d: %q solo puede subirse en los niveles %v", lvl+1, sk, lock)
+			if i >= len(lock) {
+				return fmt.Errorf("nivel %d: %q supera sus %d puntos posibles",
+					lvl+1, sk, len(lock))
+			}
+			if lvl+1 < lock[i] {
+				return fmt.Errorf("nivel %d: %q no puede subirse antes del nivel %d",
+					lvl+1, sk, lock[i])
 			}
 			lockedIdx[sk]++
 		}

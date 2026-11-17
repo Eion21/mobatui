@@ -266,3 +266,43 @@ func TestBuildAllOrdenEstable(t *testing.T) {
 		}
 	}
 }
+
+// TestPrioridadSobreviveASecuenciaInvalida regresiona el caso de Kai'Sa:
+// la fuente publica una secuencia por nivel imposible (Q=6, E=6) y una
+// prioridad válida ("QEW"). Antes se descartaba todo; ahora se conserva
+// la prioridad, que es un dato real e independiente.
+func TestPrioridadSobreviveASecuenciaInvalida(t *testing.T) {
+	rules := model.SkillRules{
+		Alphabet:  []rune{'Q', 'W', 'E', 'R'},
+		Length:    15,
+		MaxPoints: map[rune]int{'Q': 5, 'W': 5, 'E': 5, 'R': 3},
+		LockedAt:  map[rune][]int{'R': {6, 11, 16}},
+	}
+	casos := []struct {
+		name     string
+		seq      string
+		prio     string
+		wantSeq  string
+		wantPrio string
+	}{
+		// Secuencia imposible: se descarta, la prioridad se conserva.
+		{"Kai'Sa", "QWEQQRQEQQEEREE", "QEW", "", "QEW"},
+		// Secuencia legal: se conservan ambas.
+		{"Ahri", "WQEQQRQWQWRWWEE", "QWE", "WQEQQRQWQWRWWEE", "QWE"},
+		{"Malphite", "QEWQQRQEQEREEWW", "QEW", "QEWQQRQEQEREEWW", "QEW"},
+		{"Soraka", "QWEWWRWQWQRQQEE", "WQE", "QWEWWRWQWQRQQEE", "WQE"},
+		// Basura sin prioridad: nada se propaga.
+		{"Corrupta", "QQQQQQQQQQQQQQQ", "", "", ""},
+	}
+	for _, c := range casos {
+		got := bestSkillOrder([]model.SkillSequenceStats{
+			{Sequence: c.seq, Priority: c.prio, Stats: model.Stats{Games: 1000, Wins: 500}},
+		}, 1000, rules, Options{})
+		if got.Sequence != c.wantSeq {
+			t.Errorf("%s: secuencia = %q, se esperaba %q", c.name, got.Sequence, c.wantSeq)
+		}
+		if string(got.Priority) != c.wantPrio {
+			t.Errorf("%s: prioridad = %q, se esperaba %q", c.name, string(got.Priority), c.wantPrio)
+		}
+	}
+}

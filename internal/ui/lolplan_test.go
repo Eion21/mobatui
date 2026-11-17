@@ -4,8 +4,12 @@ package ui
 // estado de misión. Usan fixtures versionados: sin red ni caché.
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Eion21/mobatui/internal/lolbuild"
 	"github.com/Eion21/mobatui/internal/lolitems"
@@ -792,5 +796,159 @@ func TestAyudaDeMisionSoloEnBot(t *testing.T) {
 	a.detail = d2
 	if f := stripANSIStr(a.footer()); strings.Contains(f, "misión") {
 		t.Errorf("MID no debe anunciar la tecla de misión: %s", f)
+	}
+}
+
+// ─── diagnóstico de rutas de Deadlock ──────────────────────────────
+
+// TestRazonDeRutaAusenteDistingueCausas: la TUI no usa el mismo texto
+// para un fallo de fuente y para una muestra insuficiente.
+func TestRazonDeRutaAusenteDistingueCausas(t *testing.T) {
+	casos := []struct {
+		why  routeReason
+		want string
+	}{
+		{routeReasonNoSample, "sin muestra de compras suficiente"},
+		{routeReasonSource, "fuente no disponible"},
+		{routeReasonUnknown, "héroe fuera del catálogo"},
+		{routeReasonNone, ""},
+	}
+	for _, c := range casos {
+		if got := c.why.short(); got != c.want {
+			t.Errorf("routeReason(%d).short() = %q, se esperaba %q", c.why, got, c.want)
+		}
+	}
+}
+
+// TestClassifyRunsError: los errores del loader se clasifican bien.
+func TestClassifyRunsError(t *testing.T) {
+	if got := classifyRunsError(nil); got != routeReasonNone {
+		t.Errorf("nil = %v", got)
+	}
+	if got := classifyRunsError(errors.New("HTTP 504")); got != routeReasonSource {
+		t.Errorf("error de red = %v, se esperaba fuente", got)
+	}
+	if got := classifyRunsError(errors.New("héroe desconocido: Nurse")); got != routeReasonUnknown {
+		t.Errorf("héroe desconocido = %v", got)
+	}
+	// Un timeout también es fuente.
+	if got := classifyRunsError(context.DeadlineExceeded); got != routeReasonSource {
+		t.Errorf("timeout = %v", got)
+	}
+}
+
+// TestRutaInexistenteReintentaSoloSiFallóLaFuente: un fallo de fuente se
+// reintenta al reabrir; una muestra insuficiente no.
+func TestRutaInexistenteReintentaSoloSiFallóLaFuente(t *testing.T) {
+	base := func(why routeReason) App {
+		s := &Session{
+			Game:     model.GameDeadlock,
+			Routes:   map[string][]RouteStep{"Abrams": {}},
+			RouteWhy: map[string]routeReason{"Abrams": why},
+			Runs:     staticRuns{},
+		}
+		a := App{session: s}
+		a.detail.champ = &ChampEntry{Key: "Abrams", Name: "Abrams"}
+		return a
+	}
+	// Fuente caída: se reintenta (la entrada se limpia y vuelve a pedir).
+	a := base(routeReasonSource)
+	if cmd := runsCmdFor(a); cmd == nil {
+		t.Error("un fallo de fuente debe reintentar la ruta")
+	}
+	// Muestra insuficiente: no se reintenta.
+	a = base(routeReasonNoSample)
+	if cmd := runsCmdFor(a); cmd != nil {
+		t.Error("una muestra insuficiente no debe reintentarse")
+	}
+	// Ruta ya cargada: no se repite.
+	s := &Session{
+		Game:   model.GameDeadlock,
+		Routes: map[string][]RouteStep{"Abrams": {{Item: 1}}},
+		Runs:   staticRuns{},
+	}
+	a = App{session: s}
+	a.detail.champ = &ChampEntry{Key: "Abrams", Name: "Abrams"}
+	if cmd := runsCmdFor(a); cmd != nil {
+		t.Error("una ruta cargada no debe pedirse otra vez")
+	}
+}
+
+// staticRuns es un loader vacío para las pruebas de decisión.
+type staticRuns struct{}
+
+func (staticRuns) LoadRuns(string) ([]RouteStep, error) { return nil, nil }
+
+// TestContrasteDeDeadlock: tras subir colDim en la fase 7.1, el texto
+// secundario de Deadlock debe seguir siendo legible.
+func TestContrasteDeDeadlock(t *testing.T) {
+	if r := contrastRatio(colDim, colPanel); r < 4.5 {
+		t.Errorf("colDim sobre el panel tiene ratio %.2f: por debajo de 4.5", r)
+	}
+	// Y los colores de datos siguen por encima.
+	for name, c := range map[string]lipgloss.Color{
+		"gold": colGold, "goldLight": colGoldLight, "teal": colTeal,
+	} {
+		if r := contrastRatio(c, colPanel); r < 4.5 {
+			t.Errorf("%s sobre el panel tiene ratio %.2f", name, r)
+		}
+	}
+}
+
+// TestHabilidadesSoloPrioridad: cuando la fuente no da una secuencia por
+// nivel válida pero sí una prioridad, se muestra la prioridad
+// declarándola como tal, no una rejilla inventada.
+func TestHabilidadesSoloPrioridad(t *testing.T) {
+	s, champ := planSession(t, "kaisa", "Kai'Sa")
+	cb := champ.ByRole[champ.Roles[0]]
+	// Simular lo que deja el pipeline real para Kai'Sa: sin secuencia,
+	// con la prioridad que publica Lolalytics.
+	cb.SkillOrder.Sequence = ""
+	cb.SkillOrder.Priority = []rune("QEW")
+	cb.SkillOrder.Stats = model.Stats{Games: 55453, Wins: 31724}
+
+	d := newDetailView(champ, s)
+	d.width, d.height = 118, 40
+	d.sync()
+
+	view := gotoTab(d, "6").tabView()
+	if !strings.Contains(view, "prioridad") {
+		t.Errorf("debe mostrar la prioridad: %q", view)
+	}
+	for _, want := range []string{"Q", "E", "W"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("falta la habilidad %q en la prioridad: %q", want, view)
+		}
+	}
+	if !strings.Contains(view, "no publica una secuencia por nivel válida") {
+		t.Errorf("debe declarar que no hay secuencia: %q", view)
+	}
+	// Y no finge una rejilla nivel a nivel.
+	if strings.Contains(view, "Nv ") || strings.Contains(view, "nivel 1 ") {
+		t.Errorf("no debe dibujar una rejilla inventada: %q", view)
+	}
+}
+
+// TestHabilidadesConSecuenciaValida: cuando sí hay secuencia, se muestra
+// la rejilla y NO el aviso de prioridad sola.
+func TestHabilidadesConSecuenciaValida(t *testing.T) {
+	s, champ := planSession(t, "kaisa", "Kai'Sa")
+	cb := champ.ByRole[champ.Roles[0]]
+	cb.SkillOrder.Sequence = "WQEQQRQWQWRWWEE"
+	cb.SkillOrder.Priority = []rune("QWE")
+	cb.SkillOrder.Stats = model.Stats{Games: 3133, Wins: 1600}
+
+	d := newDetailView(champ, s)
+	d.width, d.height = 118, 40
+	d.sync()
+
+	view := gotoTab(d, "6").tabView()
+	if strings.Contains(view, "no publica una secuencia por nivel válida") {
+		t.Errorf("con secuencia válida no debe avisar: %q", view)
+	}
+	// La rejilla de LoL se reconoce por el eje de niveles y la fila de
+	// habilidades, no por el marcador ◆ de Deadlock.
+	if !strings.Contains(view, "1  2  3") {
+		t.Errorf("debe dibujar la rejilla de niveles: %q", view)
 	}
 }

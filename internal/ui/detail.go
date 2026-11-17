@@ -2173,6 +2173,30 @@ func (d detailView) emptySkillsReason(b *model.CleanBuild) string {
 	return "sin secuencia con muestra suficiente"
 }
 
+// priorityOnlyView muestra SOLO la prioridad de habilidades cuando la
+// fuente no publica (o no valida) una secuencia por nivel. Es una
+// representación distinta y se dice explícitamente: no es una ruta de
+// subida nivel a nivel.
+func (d detailView) priorityOnlyView(b *model.CleanBuild, prio []rune) []string {
+	var out []string
+	out = append(out, stDim.Render("La fuente no publica una secuencia por nivel válida."))
+	out = append(out, stDim.Render("Se muestra solo el orden de prioridad (qué habilidad maximizar antes)."))
+	out = append(out, "")
+	parts := make([]string, 0, len(prio))
+	for i, sk := range prio {
+		parts = append(parts, skillStyle(sk).Render(slotLabel(sk, b.CanonicalSkillOrder)))
+		if i < len(prio)-1 {
+			parts = append(parts, stDim.Render(" > "))
+		}
+	}
+	out = append(out, "  "+stDim.Render("prioridad  ")+strings.Join(parts, ""))
+	if b.SkillOrder.Games > 0 {
+		out = append(out, stDim.Render(fmt.Sprintf("  muestra: %s partidas · WR %s",
+			nThousand(b.SkillOrder.Games), pct(b.SkillOrder.WinRate()))))
+	}
+	return out
+}
+
 // ─── pestaña habilidades ───────────────────────────────────────────
 
 // skillsView: rejilla habilidad × nivel con marcas ◆, prioridad y
@@ -2181,6 +2205,12 @@ func (d detailView) skillsView() string {
 	b := d.CurrentBuild()
 	seq := []rune(b.SkillOrder.Sequence)
 	if len(seq) == 0 {
+		// Sin secuencia por nivel, pero con prioridad de la fuente: se
+		// muestra la prioridad DECLARÁNDOLA como tal. No se dibuja una
+		// rejilla nivel a nivel que no existe.
+		if prio := b.SkillOrder.Priority; len(prio) > 0 {
+			return lipgloss.JoinVertical(lipgloss.Left, d.priorityOnlyView(b, prio)...)
+		}
 		return stDim.Render(d.emptySkillsReason(b))
 	}
 	seqWR := b.SkillOrder.WinRate()

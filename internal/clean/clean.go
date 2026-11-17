@@ -245,12 +245,41 @@ func bestSkillOrder(seqs []model.SkillSequenceStats, total int, rules model.Skil
 	if best == nil {
 		return order
 	}
+
+	// Prioridad publicada por la FUENTE (independiente de la secuencia).
+	// Se usa como respaldo cuando la secuencia por nivel no es legal: es
+	// un dato real de la fuente, no una invención, y no hay que
+	// rechazarla por culpa de la otra representación.
+	srcPrio := func() []rune {
+		prio := make([]rune, 0, 4)
+		for _, r := range best.Priority {
+			prio = append(prio, r)
+		}
+		return prio
+	}
+
+	// La secuencia se propaga SOLO si es legal con las reglas del juego.
+	// Antes se devolvía la secuencia cruda y la prioridad derivada; si
+	// la secuencia era inválida, se descartaba todo (incluida la
+	// prioridad válida). Ahora se conserva lo que sí es utilizable.
 	prio, err := model.PriorityFromSequence(best.Sequence, rules)
 	if err != nil {
-		return model.SkillOrder{}
+		// Secuencia inválida: se descarta. La prioridad de la fuente, si
+		// existe, sigue siendo información legítima.
+		if p := srcPrio(); len(p) > 0 {
+			order.Priority = p
+			order.Stats = best.Stats
+		}
+		return order
 	}
 	order.Sequence = best.Sequence
-	order.Priority = prio
+	// La prioridad derivada de una secuencia legal es la más granular;
+	// si no apareciera, se prefiere la de la fuente.
+	if len(prio) > 0 {
+		order.Priority = prio
+	} else if p := srcPrio(); len(p) > 0 {
+		order.Priority = p
+	}
 	order.Stats = best.Stats
 	return order
 }

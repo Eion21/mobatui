@@ -624,30 +624,42 @@ func (q *qwik) quickbuild(v any, games int) (runes *model.RunePageStats, skill *
 			}
 		}
 	}
-	// Orden de habilidades: dígitos 1..4 → QWER, medido a nivel 15.
-	// El id llega como entero grande o como texto.
+	// Habilidades. Lolalytics publica DOS representaciones:
+	//   · skillorder.id     → secuencia por nivel (15 dígitos, 1..4 = QWER)
+	//   · skillpriority.id  → orden de maximización ("QEW" = Q > E > W)
+	//
+	// La prioridad es independiente y válida aunque la secuencia no lo
+	// sea, así que se conserva siempre. La secuencia se valida aquí: si
+	// sus 15 dígitos no son legales con las reglas del juego, NO se
+	// propaga (no se relaja la validación para aceptarla).
+	games, wins := 0, 0
+	var seq string
 	if so := q.obj(q.obj(qb["skillorder"])); so != nil {
+		games, wins = q.int(so["n"]), int(q.num(so["wr"])/100*float64(q.int(so["n"])))
 		switch v := q.scalar(so["id"]).(type) {
 		case string:
-			if seq, ok := digitsToQWER(v); ok {
-				skill = &model.SkillSequenceStats{
-					Sequence: seq,
-					Stats: model.Stats{
-						Games: q.int(so["n"]),
-						Wins:  int(q.num(so["wr"]) / 100 * float64(q.int(so["n"]))),
-					},
-				}
-			}
+			seq, _ = digitsToQWER(v)
 		case float64:
-			if seq, ok := digitsToQWER(strconv.FormatFloat(v, 'f', 0, 64)); ok {
-				skill = &model.SkillSequenceStats{
-					Sequence: seq,
-					Stats: model.Stats{
-						Games: q.int(so["n"]),
-						Wins:  int(q.num(so["wr"]) / 100 * float64(q.int(so["n"]))),
-					},
-				}
+			seq, _ = digitsToQWER(strconv.FormatFloat(v, 'f', 0, 64))
+		}
+	}
+	var prio string
+	if sp := q.obj(q.obj(qb["skillpriority"])); sp != nil {
+		p, _ := q.scalar(sp["id"]).(string)
+		if isSkillPriority(p) {
+			prio = p
+			// La prioridad la comparte todo el campeón, pero su muestra
+			// es mayor: si la secuencia no aporta, se usa la suya.
+			if games == 0 {
+				games, wins = q.int(sp["n"]), int(q.num(sp["wr"])/100*float64(q.int(sp["n"])))
 			}
+		}
+	}
+	if seq != "" || prio != "" {
+		skill = &model.SkillSequenceStats{
+			Sequence: seq,
+			Priority: prio,
+			Stats:    model.Stats{Games: games, Wins: wins},
 		}
 	}
 	return runes, skill
@@ -901,4 +913,21 @@ func buildFrom(cid int, keyStr, lane, patch string, bd *buildData) *model.Champi
 		Skills:      bd.skills,
 		Rules:       LoL15(),
 	}
+}
+
+// isSkillPriority dice si s es una prioridad de habilidades bien formada:
+// una permutación de QWER (3 letras en LoL, hasta 4 en otros juegos), sin
+// repeticiones.
+func isSkillPriority(s string) bool {
+	if len(s) < 2 || len(s) > 4 {
+		return false
+	}
+	seen := map[rune]bool{}
+	for _, r := range s {
+		if !strings.ContainsRune("QWER", r) || seen[r] {
+			return false
+		}
+		seen[r] = true
+	}
+	return true
 }

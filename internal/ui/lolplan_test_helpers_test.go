@@ -6,6 +6,11 @@ package ui
 
 import (
 	"encoding/json"
+	"math"
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -237,4 +242,33 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[mz]`)
 func toCleanBuildFixture(t *testing.T) *model.CleanBuild {
 	t.Helper()
 	return buildCleanFromPlan(loadPlanFixture(t, "kaisa"))
+}
+
+// contrastRatio devuelve el contraste WCAG entre dos colores.
+func contrastRatio(a, b lipgloss.Color) float64 {
+	la, lb := relLum(string(a)), relLum(string(b))
+	hi, lo := math.Max(la, lb), math.Min(la, lb)
+	return (hi + 0.05) / (lo + 0.05)
+}
+
+// relLum calcula la luminancia relativa de un color #rrggbb.
+func relLum(hex string) float64 {
+	h := strings.TrimPrefix(hex, "#")
+	if len(h) != 6 {
+		return 0
+	}
+	var rgb [3]float64
+	for i := 0; i < 3; i++ {
+		v, err := strconv.ParseInt(h[i*2:i*2+2], 16, 32)
+		if err != nil {
+			return 0
+		}
+		c := float64(v) / 255
+		if c <= 0.03928 {
+			rgb[i] = c / 12.92
+		} else {
+			rgb[i] = math.Pow((c+0.055)/1.055, 2.4)
+		}
+	}
+	return 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]
 }

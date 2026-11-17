@@ -90,3 +90,75 @@ func TestPriorityFromSequenceDeadlock(t *testing.T) {
 		}
 	}
 }
+
+// TestDefinitivaRetrasadaEsLegal: el nivel de la lista es el de
+// DESBLOQUEO, no uno obligatorio. Retrasar el punto es legal y ocurre en
+// los datos reales (1 de cada 20 secuencias de Ahri y Soraka sube la
+// segunda R en el nivel 12).
+func TestDefinitivaRetrasadaEsLegal(t *testing.T) {
+	rules := SkillRules{
+		Alphabet:  []rune{'Q', 'W', 'E', 'R'},
+		Length:    15,
+		MaxPoints: map[rune]int{'Q': 5, 'W': 5, 'E': 5, 'R': 3},
+		LockedAt:  map[rune][]int{'R': {6, 11, 16}},
+	}
+	// R en 6/11 (normal) y R en 7/13 (retrasada): ambas legales.
+	for _, c := range []struct{ name, seq string }{
+		{"normal", "QQQQQREEEEREWWW"},
+		{"retrasada", "QQQQQEREEEEWRWW"},
+	} {
+		if err := ValidateSequence(c.seq, rules); err != nil {
+			t.Errorf("%s: %q debía ser legal: %v", c.name, c.seq, err)
+		}
+		if _, err := PriorityFromSequence(c.seq, rules); err != nil {
+			t.Errorf("%s: la prioridad debía derivarse: %v", c.name, err)
+		}
+	}
+}
+
+// TestDefinitivaPrematuraEsIlegal: subir la R antes de su nivel de
+// desbloqueo sí se rechaza.
+func TestDefinitivaPrematuraEsIlegal(t *testing.T) {
+	rules := SkillRules{
+		Alphabet:  []rune{'Q', 'W', 'E', 'R'},
+		Length:    15,
+		MaxPoints: map[rune]int{'Q': 5, 'W': 5, 'E': 5, 'R': 3},
+		LockedAt:  map[rune][]int{'R': {6, 11, 16}},
+	}
+	seq := "QQQRQQEEEEREWWW" // R en el nivel 4
+	if err := ValidateSequence(seq, rules); err == nil {
+		t.Errorf("la R prematura debía rechazarse: %q", seq)
+	}
+}
+
+// TestKaisaSigueRechazandose: la corrección del retraso no puede
+// aceptar una secuencia con 6 puntos en Q y 6 en E.
+func TestKaisaSigueRechazandose(t *testing.T) {
+	rules := SkillRules{
+		Alphabet:  []rune{'Q', 'W', 'E', 'R'},
+		Length:    15,
+		MaxPoints: map[rune]int{'Q': 5, 'W': 5, 'E': 5, 'R': 3},
+		LockedAt:  map[rune][]int{'R': {6, 11, 16}},
+	}
+	seq := "QWEQQRQEQQEEREE" // Q=6, W=1, E=6, R=2
+	if err := ValidateSequence(seq, rules); err == nil {
+		t.Fatalf("Kai'Sa (Q=6, E=6) debe seguir rechazándose: %q", seq)
+	}
+}
+
+// TestTopeDePuntosSigueVigente: no se permiten rangos por encima del
+// máximo de la habilidad ni más puntos de los posibles.
+func TestTopeDePuntosSigueVigente(t *testing.T) {
+	rules := SkillRules{
+		Alphabet:  []rune{'Q', 'W', 'E', 'R'},
+		Length:    15,
+		MaxPoints: map[rune]int{'Q': 5, 'W': 5, 'E': 5, 'R': 3},
+		LockedAt:  map[rune][]int{'R': {6, 11, 16}},
+	}
+	if err := ValidateSequence("QQQQQREEEEREWWR", rules); err == nil {
+		t.Error("cuatro puntos de R deben rechazarse")
+	}
+	if err := ValidateSequence("QQQQQQUWEEEREWW", rules); err == nil {
+		t.Error("seis puntos de Q deben rechazarse")
+	}
+}
