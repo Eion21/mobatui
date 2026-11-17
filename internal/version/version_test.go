@@ -175,3 +175,84 @@ func TestNormalizeTag(t *testing.T) {
 		}
 	}
 }
+
+// TestModuleVersionSoloTagsEstables: `moduleVersion` acepta únicamente
+// un tag de release completo y rechaza todo lo demás.
+//
+// Regresión del CI de la PR: en un build de Pull Request sin tag,
+// debug.BuildInfo informa `v0.0.0-20261117182017-432de1f90106`. El
+// filtro anterior solo miraba "-0." y "+dirty", así que esa
+// pseudoversión se anunciaba como release en lugar de como desarrollo.
+func TestModuleVersionSoloTagsEstables(t *testing.T) {
+	acept := []struct{ in, want string }{
+		{"v0.1.1", "0.1.1"},
+		{"v0.2.0", "0.2.0"},
+		{"v1.0.0", "1.0.0"},
+		{"v10.20.30", "10.20.30"},
+		{"v0.0.1", "0.0.1"},
+	}
+	for _, c := range acept {
+		if got := moduleVersion(c.in); got != c.want {
+			t.Errorf("moduleVersion(%q) = %q, se esperaba %q", c.in, got, c.want)
+		}
+	}
+
+	rechaz := []string{
+		// Pseudoversiones de Go: la que aparece en el CI de una PR.
+		"v0.0.0-20261117182017-432de1f90106",
+		"v0.2.0-0.20261115161714-eb69f29de0a0",
+		"v0.1.1-0.20261115161714-eb69f29de0a0",
+		// Prereleases y metadatos.
+		"v0.2.0-rc.1",
+		"v0.2.0-beta",
+		"v0.2.0+dirty",
+		"v0.2.0.dirty",
+		// Marcadores e incompletas.
+		"(devel)",
+		"",
+		"v0.2",
+		"v1",
+		"v0.2.0.1",
+		"v.1.2",
+		"0.2.0",
+		"V0.2.0",
+		// No numéricas.
+		"va.b.c",
+		"v0.-1.2",
+	}
+	for _, v := range rechaz {
+		if got := moduleVersion(v); got != "" {
+			t.Errorf("moduleVersion(%q) = %q, debía rechazarse", v, got)
+		}
+	}
+}
+
+// TestPseudoversionNoSeAnunciaComoRelease: el caso exacto del CI. Un
+// build sin tag debe mostrar (devel) con el commit, no una versión.
+func TestPseudoversionNoSeAnunciaComoRelease(t *testing.T) {
+	for _, ver := range []string{
+		"v0.0.0-20261117182017-432de1f90106",
+		"v0.2.0-0.20261115161714-eb69f29de0a0",
+		"v0.1.1-0.20261115161714-eb69f29de0a0",
+	} {
+		bi := buildInfo{ok: true, version: ver, commit: "432de1f90106"}
+		info := resolve("", func() buildInfo { return bi })
+		if info.Source != SourceDev {
+			t.Errorf("%q se anunció como %q, debía ser desarrollo", ver, info.Source)
+		}
+		if !strings.Contains(info.Version, devVersion) {
+			t.Errorf("%q: versión %q sin marcador de desarrollo", ver, info.Version)
+		}
+	}
+	// Un tag estable sí se anuncia, desde el módulo.
+	bi := buildInfo{ok: true, version: "v0.2.0", commit: "abc123456789"}
+	info := resolve("", func() buildInfo { return bi })
+	if info.Version != "0.2.0" || info.Source != SourceModule {
+		t.Errorf("un tag estable debía anunciarse: %+v", info)
+	}
+	// Y ldflags conserva la prioridad sobre el módulo.
+	info = resolve("0.2.0", func() buildInfo { return bi })
+	if info.Source != SourceInjected {
+		t.Errorf("ldflags debía mandar: %s", info.Source)
+	}
+}

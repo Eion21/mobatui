@@ -114,17 +114,65 @@ func normalizeTag(v string) string {
 }
 
 // moduleVersion devuelve la versión si el módulo fue instalado con
-// `go install ...@vX.Y.Z`. Descarta pseudoversiones y "(devel)".
+// `go install ...@vX.Y.Z`. Solo se acepta un tag de release estable.
+//
+// Antes se filtraban cadenas parciales ("-0.", "+dirty"), lo que dejaba
+// pasar pseudoversiones de Go con otra forma: en un build de Pull
+// Request sin tag, `debug.BuildInfo` informa algo como
+// `v0.0.0-20261117182017-432de1f90106`, que se anunciaba como release
+// en vez de como desarrollo.
+//
+// La validación es ahora estricta: `v` + versión semántica completa, sin
+// prerelease ni metadatos de build. Es la forma que garantiza que solo
+// un tag de release publicado supere el filtro.
 func moduleVersion(v string) string {
-	if v == "" || v == devVersion || !strings.HasPrefix(v, "v") {
-		return ""
-	}
-	// Las pseudoversiones llevan la marca "0.0.0-" o "vX.Y.Z-0." seguida
-	// de un timestamp: son builds locales, no releases.
-	if strings.Contains(v, "-0.") || strings.Contains(v, "+dirty") {
+	if !isStableTag(v) {
 		return ""
 	}
 	return normalizeTag(v)
+}
+
+// isStableTag reconoce exactamente `vMAJOR.MINOR.PATCH` con números
+// decimales. Rechaza, entre otros:
+//
+//	v0.0.0-20261117182017-432de1f90106   pseudoversión de un checkout
+//	v0.2.0-0.20261115161714-eb69f29de0a0 pseudoversión sobre un tag
+//	v0.1.1-0.20261115161714-eb69f29de0a0 idem
+//	v0.2.0-rc.1                          prerelease
+//	v0.2.0+dirty                         árbol sucio
+//	v0.2 / v1 / V0.2.0 / (devel)         incompletas o marcadores
+//
+// Es intencionadamente estricto: cualquier forma no reconocida se trata
+// como "sin versión de release", que es el comportamiento seguro.
+func isStableTag(v string) bool {
+	if len(v) < 2 || v[0] != 'v' {
+		return false
+	}
+	parts := strings.Split(v[1:], ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if !isDecimal(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// isDecimal dice si s son dígitos ASCII no vacíos. Sin ceros a la
+// izquierda no hace falta: una versión así sería inválida de todas
+// formas y no es ambiguo para comparar.
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // shortCommit recorta el hash VCS a 7 caracteres.
