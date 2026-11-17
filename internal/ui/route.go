@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -113,4 +115,46 @@ func loadHybridCmd(l BuildLoader, champKey, key string) tea.Cmd {
 		b, err := l.LoadHybrid(champKey)
 		return hybridLoadedMsg{ChampKey: champKey, Key: key, Build: b, Err: err}
 	}
+}
+
+// routeReason explica POR QUÉ un héroe no tiene ruta, en una línea
+// breve para la TUI. Distingue la causa real en lugar de mostrar el
+// mismo texto para toda ausencia: un fallo de red, una muestra corta y
+// una fuente sin partidas se arreglan de forma muy distinta.
+type routeReason int
+
+const (
+	routeReasonNone routeReason = iota
+	// routeReasonNoSample: la fuente respondió, pero no hay partidas
+	// suficientes para destilar una ruta.
+	routeReasonNoSample
+	// routeReasonSource: la consulta falló (red, timeout, HTTP).
+	routeReasonSource
+	// routeReasonUnknown: héroe desconocido para el catálogo.
+	routeReasonUnknown
+)
+
+// short devuelve el texto para la TUI.
+func (r routeReason) short() string {
+	switch r {
+	case routeReasonNoSample:
+		return "sin muestra de compras suficiente"
+	case routeReasonSource:
+		return "fuente no disponible"
+	case routeReasonUnknown:
+		return "héroe fuera del catálogo"
+	default:
+		return ""
+	}
+}
+
+// classifyRunsError traduce el error del loader a una razón de UI.
+func classifyRunsError(err error) routeReason {
+	if err == nil {
+		return routeReasonNone
+	}
+	if strings.Contains(err.Error(), "desconocido") {
+		return routeReasonUnknown
+	}
+	return routeReasonSource
 }

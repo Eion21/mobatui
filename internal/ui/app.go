@@ -127,6 +127,9 @@ type Session struct {
 	Routes map[string][]RouteStep
 	// Runs trae la ruta bajo demanda; nil = sin datos de ruta.
 	Runs RunsLoader
+	// RouteWhy guarda por héroe la razón de la ausencia de ruta, para
+	// no mostrar el mismo mensaje genérico a causas distintas.
+	RouteWhy map[string]routeReason
 	// Hybrids guarda la build híbrida por héroe (carga bajo demanda).
 	// nil = en curso; ausente = no pedida; presente = calculada.
 	Hybrids map[string]*HybridBuildView
@@ -835,8 +838,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.session.Routes == nil {
 			a.session.Routes = map[string][]RouteStep{}
 		}
-		if m.Err != nil || len(m.Steps) == 0 {
+		if a.session.RouteWhy == nil {
+			a.session.RouteWhy = map[string]routeReason{}
+		}
+		if m.Err != nil {
 			a.session.Routes[m.ChampKey] = []RouteStep{}
+			a.session.RouteWhy[m.ChampKey] = classifyRunsError(m.Err)
+		} else if len(m.Steps) == 0 {
+			a.session.Routes[m.ChampKey] = []RouteStep{}
+			a.session.RouteWhy[m.ChampKey] = routeReasonNoSample
 		} else {
 			a.session.Routes[m.ChampKey] = m.Steps
 		}
@@ -1093,8 +1103,15 @@ func runsCmdFor(a App) tea.Cmd {
 	if a.session.Routes == nil {
 		a.session.Routes = map[string][]RouteStep{}
 	}
-	if _, ok := a.session.Routes[key]; ok {
-		return nil // ya cargadas o en curso
+	if steps, ok := a.session.Routes[key]; ok {
+		// Un fallo de FUENTE no es un veredicto sobre los datos: se
+		// reintenta al reabrir el héroe en vez de dejar la sesión
+		// marcada como "sin ruta" por un timeout pasajero.
+		if len(steps) > 0 || a.session.RouteWhy[key] != routeReasonSource {
+			return nil // ya cargadas, en curso, o sin muestra real
+		}
+		delete(a.session.Routes, key)
+		delete(a.session.RouteWhy, key)
 	}
 	a.session.Routes[key] = nil // marca "en curso" hasta que llegue el msg
 	return loadRunsCmd(a.session.Runs, key)

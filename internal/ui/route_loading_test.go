@@ -112,7 +112,15 @@ func TestRouteLoadingTransitions(t *testing.T) {
 					t.Error("successful route retains a provisional/failure label")
 				}
 			} else {
-				assertInOrder(t, got, "Ruta no disponible — mostrando estadísticas generales", "Compras frecuentes", "Objeto prueba 00", "Objeto prueba 01", "Objeto prueba 02", "Objeto prueba 03")
+				// La ausencia dice su causa: error de fuente frente a
+				// muestra insuficiente. Ambas conservan las estadísticas.
+				wantLabel := "Ruta no disponible — mostrando estadísticas generales"
+				if tc.msg.Err != nil {
+					wantLabel = "Ruta no disponible (fuente no disponible) — mostrando estadísticas generales"
+				} else {
+					wantLabel = "Ruta no disponible (sin muestra de compras suficiente) — mostrando estadísticas generales"
+				}
+				assertInOrder(t, got, wantLabel, "Compras frecuentes", "Objeto prueba 00", "Objeto prueba 01", "Objeto prueba 02", "Objeto prueba 03")
 				for _, unwanted := range []string{"EARLY", "MID", "LATE", "SITUACIONALES", "RUTA"} {
 					if strings.Contains(got, unwanted) {
 						t.Errorf("unavailable route invents section %q", unwanted)

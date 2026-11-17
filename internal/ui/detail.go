@@ -1423,6 +1423,13 @@ func (d detailView) routeStatus() string {
 	if (requested && steps == nil) || (!requested && d.session.Runs != nil) {
 		return "Cargando ruta de compra…"
 	}
+	// La ausencia tiene causas distintas: se dice cuál en vez de un
+	// texto único. El detalle técnico queda en los logs.
+	if why, ok := d.session.RouteWhy[d.champ.Key]; ok {
+		if s := why.short(); s != "" {
+			return "Ruta no disponible (" + s + ") — mostrando estadísticas generales"
+		}
+	}
 	return "Ruta no disponible — mostrando estadísticas generales"
 }
 
