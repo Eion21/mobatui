@@ -24,3 +24,6 @@ graphify-out/
 odd/
 .atl/
 .claude/
+
+# Artefactos de GoReleaser (snapshots locales)
+dist/

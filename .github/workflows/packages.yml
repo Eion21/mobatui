@@ -1,0 +1,111 @@
+name: Packages
+
+# Comprueba que los manifiestos de los gestores de paquetes se generan y
+# son coherentes. NO publica nada: no sube manifiestos, no abre PRs en
+# Microsoft y no crea tags.
+#
+# Se ejecuta cuando cambia la configuración de empaquetado o el
+# verificador, no en cada push: no depende de este código.
+on:
+  pull_request:
+    paths:
+      - ".goreleaser.yaml"
+      - ".goreleaser-publish.yaml"
+      - "cmd/pkgcheck/**"
+      - ".github/workflows/packages.yml"
+      - ".github/workflows/publish-packages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    name: manifest structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # 'goreleaser check' valida el esquema del config. Es lo que detectó
+      # 'archives.builds' deprecado en v0.2.1.
+      # Tests de la etiqueta 'packages': tag checkout, formato de tag y
+      # verificación del propio YAML. Sin red.
+      - name: Test packages helpers
+        run: go test -tags packages ./cmd/pkgcheck -count=1
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.19.0
+          args: check
+
+      # Snapshot SIN publicar y SIN los gestores que escriben fuera:
+      # --skip incluye publish para no tocar GitHub.
+      - name: Generate artifacts and manifests
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.19.0
+          args: release --snapshot --clean --skip=publish,validate
+
+      # El ZIP de Windows es un requisito DURO de WinGet y Scoop: si falta,
+      # los manifiestos apuntarían a un tar.gz que ninguno de los dos acepta.
+      - name: Require windows zip
+        run: |
+          set -euo pipefail
+          ls -l dist/*windows*.zip
+          test -n "$(ls dist/*windows*.zip 2>/dev/null)" || {
+            echo "FALTA el .zip de Windows: WinGet y Scoop lo necesitan"
+            exit 1
+          }
+
+      # Verificación ESTRUCTURAL. En un PR no hay release publicada con esa
+      # versión (el snapshot es 0.2.1-SNAPSHOT-xxxx), así que no se puede
+      # comparar contra assets reales: eso lo hace publish-packages.yml
+      # contra el tag publicado.
+      #
+      # Aquí se comprueba lo que sí es verificable sin red: que los
+      # manifiestos existen, tienen los campos obligatorios y declaran la
+      # MISMA versión que el snapshot genera.
+      - name: Verify manifest structure
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oP '"version": "\K[^"]+' dist/scoop/bucket/mobatui.json)
+          echo "versión de los manifiestos: $VERSION"
+          # La versión de Scoop y la del Cask deben coincidir entre sí.
+          CSK=$(grep -oP '^\s*version "\K[^"]+' dist/homebrew/Casks/mobatui.rb | head -1)
+          echo "versión del cask: $CSK"
+          test "$VERSION" = "$CSK" || {
+            echo "::error::la versión de Scoop ($VERSION) y del Cask ($CSK) difieren"
+            exit 1
+          }
+          # El Cask debe cubrir macOS arm64 e Intel.
+          grep -q 'on_arm do' dist/homebrew/Casks/mobatui.rb || { echo "::error::falta on_arm"; exit 1; }
+          grep -q 'on_intel do' dist/homebrew/Casks/mobatui.rb || { echo "::error::falta on_intel"; exit 1; }
+          # Scoop debe apuntar al ZIP de Windows y exponer mobatui.exe.
+          grep -q '"url":.*windows_amd64\.zip' dist/scoop/bucket/mobatui.json \
+            || { echo "::error::Scoop no apunta al ZIP de Windows"; exit 1; }
+          grep -q '"bin"' dist/scoop/bucket/mobatui.json \
+            || { echo "::error::Scoop sin bin"; exit 1; }
+          # WinGet: portable, alias y UpgradeBehavior.
+          W=$(ls dist/winget/manifests/*/*/*/*/*.installer.yaml)
+          grep -q 'NestedInstallerType: portable' "$W" || { echo "::error::winget no portable"; exit 1; }
+          grep -q 'PortableCommandAlias: mobatui' "$W" || { echo "::error::winget sin alias"; exit 1; }
+          grep -q 'UpgradeBehavior: uninstallPrevious' "$W" || { echo "::error::winget sin upgrade"; exit 1; }
+          echo "estructura correcta: 5 manifiestos coherentes"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manifests
+          path: |
+            dist/winget/**
+            dist/homebrew/**
+            dist/scoop/**
+          retention-days: 7
+          if-no-files-found: warn
