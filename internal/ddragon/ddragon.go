@@ -7,6 +7,7 @@ package ddragon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,6 +76,37 @@ func (cl *Client) WithHTTPClient(h *http.Client) *Client {
 	return cl
 }
 
+// HTTPError es un fallo de Data Dragon con código de estado.
+//
+// Existe para que quien consume un icono pueda distinguir un recurso
+// DEFINITIVAMENTE ausente (404/410: ese PNG no existe para este parche)
+// de un fallo TRANSITORIO (5xx, timeout, DNS). Sin esta distinción, la
+// UI no puede decidir entre "no volver a pedirlo" y "reintentar cuando
+// vuelva la red", y acaba tratando igual ambos casos.
+type HTTPError struct {
+	URL        string
+	StatusCode int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("ddragon: %s → HTTP %d", e.URL, e.StatusCode)
+}
+
+// NotFound indica que el recurso no existe en el CDN para esta versión.
+// Es un fallo permanente: reintentarlo daría el mismo 404.
+func (e *HTTPError) NotFound() bool {
+	return e.StatusCode == http.StatusNotFound || e.StatusCode == http.StatusGone
+}
+
+// IsNotFound informa de si el error (posiblemente envuelto) es un 404/410.
+func IsNotFound(err error) bool {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.NotFound()
+	}
+	return false
+}
+
 // getURL resuelve una URL con caché → HTTP → fixture.
 func (cl *Client) getURL(url string, ttl time.Duration) ([]byte, cache.State, error) {
 	res, err := cl.c.Get(url, ttl, func() ([]byte, error) {
@@ -84,7 +116,7 @@ func (cl *Client) getURL(url string, ttl time.Duration) ([]byte, cache.State, er
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("ddragon: %s → HTTP %d", url, resp.StatusCode)
+			return nil, &HTTPError{URL: url, StatusCode: resp.StatusCode}
 		}
 		return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	})

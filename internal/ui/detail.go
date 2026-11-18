@@ -31,6 +31,11 @@ type detailView struct {
 	itemIdx  int  // tarjeta seleccionada (lista plana core+botas)
 	artMode  int  // 0 mini half-block · 1 ASCII color · 2 ASCII mono
 	showItem bool // popup con el detalle de la tarjeta activa
+	// artCols recuerda el ancho de icono con el que se prerenderizó el
+	// arte de Ruta/Alt. Cambiar de tramo de ancho (p.ej. 80 → 118)
+	// invalida el arte ya cargado: el de 3 columnas no debe reutilizarse
+	// en una línea que pide 6. 0 = nunca prerenderizado.
+	artCols int
 	// showUpgrades es el toggle `u`: plegar las tarjetas de mejora y
 	// dejar solo compras nuevas (Deadlock con ruta).
 	showUpgrades bool

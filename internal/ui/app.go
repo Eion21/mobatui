@@ -138,6 +138,13 @@ type Session struct {
 	runeArtMu   sync.RWMutex
 	RuneArt     map[artKey]string
 	runePending map[artKey]bool
+	// artFailed recuerda por qué una clave no tiene arte, y solo para
+	// los fallos DEFINITIVOS (ver artFailure). Un fallo transitorio NO
+	// se apunta: si la red vuelve, el icono debe poder recuperarse.
+	//
+	// Sin este registro, tabArtReady nunca daría por completa la
+	// pestaña y cada evento de resize relanzaría la misma descarga.
+	artFailed map[artKey]artFailure
 	// Routes guarda la ruta de compra por héroe (Deadlock, carga bajo
 	// demanda al abrir el detalle): orden de consenso, cadena y tasas.
 	// nil = en curso; vacía = sin datos (muestra insuficiente o error).
@@ -326,9 +333,18 @@ func (s *Session) ItemArtFor(id, cols int) string {
 	return s.ItemArt[artKey{Kind: artItem, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}]
 }
 
-// InvalidateArt vacía la caché de arte (cambio de parche o de modo).
+// InvalidateArt vacía la caché de arte (cambio de parche, de proveedor
+// o de modo).
+//
+// Limpia TAMBIÉN los fallos memorizados: un 404 del parche anterior no
+// dice nada del nuevo, y un proveedor distinto puede sí tener el icono.
+// Sin esto, un cambio de versión de Data Dragon dejaría ítems marcados
+// como ausentes para siempre.
 func (s *Session) InvalidateArt() {
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
 	s.ItemArt = map[artKey]string{}
+	s.artFailed = map[artKey]artFailure{}
 }
 
 // ItemName resuelve el nombre real de un ítem con fallback.
@@ -906,7 +922,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.detail.vp.Width = m.Width - 4
 		a.detail.vp.Height = max(8, m.Height-10)
 		a.help.Width = m.Width
-		return a, nil
+		// El ancho de los iconos de Ruta/Alt. depende del terminal: al
+		// cambiar de tramo hay que reprecargar el arte con el ancho
+		// nuevo. Sin esto, redimensionar reutilizaba iconos de 3
+		// columnas en una línea que ya pedía 6 (deformados o ausentes).
+		var artCmd tea.Cmd
+		if a.detail.tab == 1 || a.detail.tab == 2 {
+			nuevo := iconColsFor(m.Width)
+			if nuevo != a.detail.artCols {
+				artCmd = a.detail.artCmd()
+			}
+		}
+		return a, artCmd
 
 	case tea.MouseMsg:
 		// La rueda va siempre al detalle (scroll del viewport); los
@@ -965,6 +992,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.session != nil {
 			for k, art := range m.Art {
 				a.session.putArt(k, art)
+			}
+			// Se recuerda el ancho con el que se acaba de cargar, pero
+			// SOLO si coincide con el que la vista pide AHORA.
+			//
+			// Caso real: el usuario redimensiona 80 → 118 mientras la
+			// descarga de 3 columnas está en vuelo. Al llegar, ese arte
+			// se guarda bajo su clave (3 col), que es correcta y no pisa
+			// la de 6; pero dar por cargado "el ancho vigente" haría que
+			// tabArtReady creyera que 6 ya está listo y la línea se
+			// quedara sin icono. Solo se marca cuando el ancho de la
+			// respuesta es el vigente.
+			cols := iconColsFor(a.detail.width)
+			if cols != 0 && m.ArtHasWidth(cols) {
+				a.detail.artCols = cols
 			}
 			a.detail.sync()
 		}
@@ -1576,4 +1617,69 @@ func humanAge(d time.Duration) string {
 		return fmt.Sprintf("%d min", int(d.Minutes()))
 	}
 	return "un momento"
+}
+
+// ─── estado de los iconos de Ruta/Alt. ─────────────────────────────
+
+// artFailure explica por qué una clave no produjo arte.
+//
+// La distinción es funcional, no cosmética:
+//
+//   - Un recurso AUSENTE (404/410) o un PNG CORRUPTO no van a mejorar
+//     reintentándolos: se memorizan para no repetir la descarga.
+//   - Un fallo TRANSITORIO (red caída, timeout, 5xx) sí puede resolverse
+//     solo: NO se memoriza, y el próximo intento lo vuelve a probar.
+//
+// Los reintentos nunca son infinitos ni ocurren en View(): solo se
+// reintenta cuando el usuario provoca un evento que relanza la precarga
+// (cambiar de pestaña, de campeón o de tramo de ancho).
+type artFailure uint8
+
+const (
+	// artFailNone: no hay fallo registrado.
+	artFailNone artFailure = iota
+	// artFailMissing: el CDN responde 404/410 para ese id y parche.
+	artFailMissing
+	// artFailCorrupt: llegó un cuerpo que no se pudo decodificar como PNG.
+	artFailCorrupt
+	// artFailTransient: red, timeout, 5xx o proveedor sin datos. Se
+	// puede recuperar, así que no se memoriza.
+	artFailTransient
+)
+
+// classifyArtError traduce un error del proveedor a su clase.
+//
+// Debe seguir siendo válido para cualquier staticdata.Provider: los que
+// no exponen un tipo concreto (Deadlock, fixtures) caen en transitorio,
+// que es la opción conservadora (permite recuperarse).
+func classifyArtError(err error) artFailure {
+	if err == nil {
+		return artFailNone
+	}
+	if ddragon.IsNotFound(err) {
+		return artFailMissing
+	}
+	return artFailTransient
+}
+
+// artDidFail indica si esa clave tiene un fallo DEFINITIVO registrado.
+func (s *Session) artDidFail(key artKey) bool {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	f := s.artFailed[key]
+	return f == artFailMissing || f == artFailCorrupt
+}
+
+// markArtFailed registra un fallo definitivo; los transitorios se
+// ignoran a propósito para no bloquear la recuperación.
+func (s *Session) markArtFailed(key artKey, kind artFailure) {
+	if kind != artFailMissing && kind != artFailCorrupt {
+		return
+	}
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
+	if s.artFailed == nil {
+		s.artFailed = map[artKey]artFailure{}
+	}
+	s.artFailed[key] = kind
 }

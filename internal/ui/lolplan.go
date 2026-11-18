@@ -174,11 +174,92 @@ func (d detailView) routeViewA(plan *lolbuild.Plan) []string {
 	return out
 }
 
-// smallArtCols es el ancho del icono compacto en Ruta y Alt.
+// ─── icono compacto de Ruta y Alt. ──────────────────────────────────
 //
-// Tres columnas producen exactamente UNA fila de medio bloque. Con 4
-// el icono ocupa dos filas y rompería el formato de un paso por línea.
-const smallArtCols = 3
+// RESTRICCIÓN DURA: una compra = una fila de texto. El render de medio
+// bloque usa DOS píxeles verticales por fila, así que en una sola fila
+// solo hay 2 muestras verticales del icono: el detalle vertical es
+// imposible y el ancho es lo único que aporta información.
+//
+// Consecuencia geométrica: el icono de Data Dragon es cuadrado (64x64),
+// de modo que en 1 fila el aspecto correcto son 2 columnas (2x2 px,
+// aspecto 1.0). Cualquier ancho mayor ESTIRA horizontalmente:
+//
+//	2 col  → aspecto 1.00 (cuadrado, pero solo 4 px: una muestra de color)
+//	3 col  → aspecto 1.50
+//	4 col  → aspecto 2.00
+//	6 col  → aspecto 3.00
+//	8 col  → aspecto 4.00
+//
+// Se midió la fidelidad estructural (correlación entre el icono
+// reescalado y el original) con 190 iconos REALES de Data Dragon:
+//
+//	2 col 0.27 · 3 col 0.39 · 4 col 0.43 · 6 col 0.46 · 8 col 0.49
+//
+// Es decir: de 3 a 8 columnas se gana un 25% de fidelidad a cambio de
+// duplicar la distorsión y gastar 5 columnas de línea. El límite lo pone
+// la altura (2 px), no el ancho.
+//
+// Decisión: ancho ADAPTATIVO al espacio real. Se sube el icono solo
+// cuando la línea tiene holgura comprobada, y nunca se pasa de 6 (a 8 la
+// mancha pierde el contorno y deja de leerse como objeto).
+//
+// ALCANCE DE LA MEJORA — leer antes de tocar esto:
+//
+// Esto es una mejora MODERADA de distinguibilidad, NO una solución de
+// reconocimiento de objetos. En una fila el icono tiene 2 píxeles de
+// alto: se distingue mejor la paleta y la estructura horizontal de cada
+// objeto (la banda clara de Ángel de la guarda, el degradado
+// rojo-púrpura-azul de Sombrero mortal), pero no se «ve» el objeto.
+// Para reconocimiento real haría falta más altura (2–3 filas), lo que
+// rompería el formato actual de «una compra, una línea». No se
+// considera un defecto pendiente: es el compromiso elegido.
+//
+// Comparación reproducible: `TestComparacionIconosReproducible` genera
+// una hoja de variantes (3/4/6/8 columnas) con los PNG de
+// testdata/ddragon, SIN depender de la caché personal ni de rutas
+// privadas. Ver el comentario de ese test para regenerarla.
+const (
+	// smallArtCols es el ancho por defecto y el mínimo con icono.
+	smallArtCols = 3
+	// artColsMedium se usa cuando hay sitio para un icono más legible.
+	artColsMedium = 4
+	// artColsLarge es el máximo: por encima, el estiramiento (3x) hace
+	// que el icono deje de reconocerse como objeto concreto.
+	artColsLarge = 6
+	// artMinWidth conserva el umbral que ya existía en v0.2.1: por
+	// debajo de 60 columnas no se dibuja icono y la línea queda en texto.
+	//
+	// Se mantiene aunque a 60 el ancho útil (~54) sea menor que la línea
+	// más larga (75) y el texto se envuelva: eso ya ocurría ANTES de esta
+	// fase y quitarlo sería una regresión, no una mejora. Esta fase solo
+	// AÑADE icono más ancho donde hay sitio comprobado.
+	artMinWidth = 60
+)
+
+// iconColsFor elige el ancho de icono según el espacio disponible.
+//
+// Los umbrales están medidos sobre la línea más larga real (Ruta con
+// "muestra limitada" y Alt. con pick+WR): a 80 columnas caben ~74 útiles
+// y la línea más larga mide 75 en el peor caso, así que 4 columnas solo
+// entran con holgura a partir de 100. Se prefiere quedarse corto antes
+// que empujar el texto a una segunda línea y romper "una compra, una
+// fila".
+func iconColsFor(width int) int {
+	switch {
+	case width <= 0:
+		// Ancho desconocido (cmd/render, tests): el tamaño conservador.
+		return smallArtCols
+	case width < artMinWidth:
+		return 0
+	case width < 100:
+		return smallArtCols
+	case width < 118:
+		return artColsMedium
+	default:
+		return artColsLarge
+	}
+}
 
 // itemIconInline devuelve el icono compacto de un ítem con un espacio
 // final, o "" si no hay arte disponible.
@@ -191,11 +272,11 @@ func (d detailView) itemIconInline(id int) string {
 	if id <= 0 {
 		return ""
 	}
-	// En terminales muy estrechas el icono desplazaría el nombre.
-	if d.width > 0 && d.width < 60 {
+	cols := iconColsFor(d.width)
+	if cols == 0 {
 		return ""
 	}
-	icon := d.session.ItemArtFor(id, smallArtCols)
+	icon := d.session.ItemArtFor(id, cols)
 	if icon == "" {
 		return ""
 	}
@@ -571,17 +652,62 @@ func itemArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
 		}()
 		for _, j := range jobs {
 			raw, err := p.ItemIcon(j.id)
-			if err != nil || len(raw) == 0 {
+			if err != nil {
+				// Solo los fallos DEFINITIVOS (404/410) se memorizan;
+				// un error de red no debe impedir recuperar el icono
+				// cuando vuelva la conexión.
+				s.markArtFailed(j.key, classifyArtError(err))
+				continue
+			}
+			if len(raw) == 0 {
+				// Respuesta vacía sin error: sin cuerpo no hay imagen, y
+				// reintentarlo daría lo mismo.
+				s.markArtFailed(j.key, artFailMissing)
 				continue
 			}
 			img, err := png.Decode(bytes.NewReader(raw))
 			if err != nil {
+				// PNG corrupto: el cuerpo llegó pero no es válido para
+				// este parche; reintentarlo daría el mismo resultado.
+				s.markArtFailed(j.key, artFailCorrupt)
 				continue
 			}
-			out[j.key] = imgrender.RenderAspect(img, cols, panelBg)
+			// UNA fila SIEMPRE. RenderAspect calcularía rows =
+			// cols*alto/ancho/2 (3 filas a 6 columnas), y eso rompería
+			// el formato "una compra, una línea". En una sola fila el
+			// icono solo tiene 2 píxeles verticales, así que el ancho
+			// es la única dimensión que aporta detalle.
+			out[j.key] = imgrender.Render(img, cols, 1, panelBg)
 		}
 		return artLoadedMsg{Art: out}
 	}
+}
+
+// tabArtReady indica si TODOS los iconos que la pestaña va a pintar ya
+// están en caché para ese ancho, parche y modo. Se usa para no relanzar
+// la precarga tras cada evento de resize.
+func (s *Session) tabArtReady(tab int, plan *lolbuild.Plan, cols int) bool {
+	if s == nil || cols <= 0 {
+		return false
+	}
+	ids := tabItemIDs(tab, plan)
+	if len(ids) == 0 {
+		return true
+	}
+	for _, id := range ids {
+		key := artKey{Kind: artItem, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}
+		if s.hasArt(key) {
+			continue
+		}
+		// Un icono que ya falló no se vuelve a pedir: se considera
+		// resuelto (no hay arte) para no relanzar la descarga en cada
+		// resize.
+		if s.artDidFail(key) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // tabItemIDs devuelve los ids de ítem que muestra una pestaña de ruta o
@@ -803,6 +929,20 @@ type artLoadedMsg struct {
 	Art map[artKey]string
 }
 
+// ArtHasWidth indica si el lote trae arte con el ancho de columna dado.
+//
+// Sirve para no dar por cargado un ancho que todavía no ha llegado: si
+// el usuario redimensiona mientras hay una descarga en vuelo, la
+// respuesta tardía corresponde al ancho ANTERIOR.
+func (m artLoadedMsg) ArtHasWidth(cols int) bool {
+	for k := range m.Art {
+		if k.Cols == cols {
+			return true
+		}
+	}
+	return false
+}
+
 // artCmd lanza la carga asíncrona del arte de la pestaña actual.
 //
 // Cubre las tres pestañas con iconos: Ruta (1), Alt. (2) y Runas (4).
@@ -813,7 +953,19 @@ func (d detailView) artCmd() tea.Cmd {
 	}
 	switch d.tab {
 	case 1, 2:
-		return itemArtCmdFor(d.session, tabItemIDs(d.tab, d.lolPlan()), smallArtCols)
+		// Mismo ancho que itemIconInline: si divergen, la precarga
+		// llenaría la caché con un tamaño que nadie pinta y la línea
+		// saldría sin icono hasta el siguiente cambio.
+		cols := iconColsFor(d.width)
+		if cols == 0 {
+			return nil
+		}
+		// Mismo tramo ya prerenderizado: no hay nada que pedir. Evita
+		// repetir la descarga en cada tick de resize.
+		if d.artCols == cols && d.session.tabArtReady(d.tab, d.lolPlan(), cols) {
+			return nil
+		}
+		return itemArtCmdFor(d.session, tabItemIDs(d.tab, d.lolPlan()), cols)
 	case 4:
 		return runeArtCmdFor(d.session, runePageIDs(d.CurrentBuild()))
 	}

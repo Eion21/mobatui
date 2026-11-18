@@ -1,7 +1,13 @@
 package ui
 
 import (
+	"bytes"
+	"fmt"
+	"image/png"
+	"os"
 	"testing"
+
+	"github.com/Eion21/mobatui/internal/imgrender"
 )
 
 // BenchmarkRenderRuta mide el render repetido de la pestaña Ruta.
@@ -171,5 +177,65 @@ func BenchmarkRenderRutaConEtiquetas(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = d.routeViewA(plan)
+	}
+}
+
+// BenchmarkIconoCompactoPorAncho mide la generación de UN icono nuevo
+// (decodificación PNG + render) para cada ancho de la escala adaptativa.
+// Es lo que cuesta la primera vez que se abre Ruta en ese tamaño.
+func BenchmarkIconoCompactoPorAncho(b *testing.B) {
+	for _, cols := range []int{smallArtCols, artColsMedium, artColsLarge} {
+		b.Run(fmt.Sprintf("cols=%d", cols), func(b *testing.B) {
+			raw, err := os.ReadFile("../../testdata/ddragon/3026.png")
+			if err != nil {
+				b.Skip(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				img, err := png.Decode(bytes.NewReader(raw))
+				if err != nil {
+					b.Fatal(err)
+				}
+				_ = imgrender.Render(img, cols, 1, panelBg)
+			}
+		})
+	}
+}
+
+// BenchmarkRenderRuta118Icono6 mide pintar Ruta a 118 columnas, donde el
+// icono es de 6 columnas (el caso más caro).
+func BenchmarkRenderRuta118Icono6(b *testing.B) {
+	d := planDetailView(b, "briar", "Briar", 118, 60)
+	d.tab = 1
+	d.ensureTabArt()
+	plan := d.lolPlan()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = d.routeViewA(plan)
+	}
+}
+
+// BenchmarkRenderAlt118Icono6 lo mismo para Alternativas.
+func BenchmarkRenderAlt118Icono6(b *testing.B) {
+	d := planDetailView(b, "briar", "Briar", 118, 60)
+	d.tab = 2
+	d.ensureTabArt()
+	plan := d.lolPlan()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = d.alternativesViewB(plan)
+	}
+}
+
+// BenchmarkIconColsFor mide la elección de ancho: debe ser trivial y sin
+// asignaciones (se llama por icono y por frame).
+func BenchmarkIconColsFor(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = iconColsFor(118)
 	}
 }
