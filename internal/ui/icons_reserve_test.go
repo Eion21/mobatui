@@ -111,8 +111,8 @@ func TestLiberacionTardiaNoBajaDeCero(t *testing.T) {
 	if !s.reserveArt(k) {
 		t.Fatal("debía reservar")
 	}
-	s.InvalidateArt() // reinicia los mapas
-	s.releaseArt(k)   // liberación tardía
+	s.InvalidateArt()  // reinicia los mapas
+	s.releaseArt(k, 0) // liberación tardía de la generación vieja
 
 	if got := s.runePending[s.resourceForLocked(k)]; got != 0 {
 		t.Errorf("contador = %d, se esperaba 0 (no negativo)", got)
@@ -155,7 +155,7 @@ func TestReservaConcurrenteNoNiegaElContador(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			if s.reserveArt(k) {
-				s.releaseArt(k)
+				s.releaseArt(k, s.artGenOf(k))
 			}
 		}()
 	}
@@ -186,3 +186,33 @@ func TestInvalidateArtConReservaDeRuna(t *testing.T) {
 }
 
 var _ = ddragon.IsNotFound
+
+// TestLiberacionTardiaNoAnulaReservaNueva: el caso realmente dañino de
+// una liberación tardía. Si el Cmd viejo libera DESPUÉS de que ya hay una
+// reserva nueva, sin la comprobación el contador baja a 0 y borra la
+// entrada: la reserva nueva desaparece y el recurso se descarga dos veces.
+func TestLiberacionTardiaNoAnulaReservaNueva(t *testing.T) {
+	p := &cuentaProvider{raw: pngValido(t)}
+	s := sesionReservas(p)
+	k := artKey{Kind: artItem, ID: 99, Cols: smallArtCols, Mode: artHalfBlock, Patch: "16.21"}
+
+	if !s.reserveArt(k) {
+		t.Fatal("debía reservar (Cmd viejo)")
+	}
+	s.InvalidateArt()
+	if !s.reserveArt(k) {
+		t.Fatal("debía reservar de nuevo (Cmd nuevo)")
+	}
+
+	// El Cmd viejo termina ahora y libera CON SU generación (la 0).
+	s.releaseArt(k, 0)
+
+	// La reserva del Cmd nuevo debe SEGUIR viva.
+	if got := s.pendingFor(k); got != 1 {
+		t.Errorf("la reserva nueva debía sobrevivir; pendiente = %d", got)
+	}
+	// Consecuencia observable: no se lanza una segunda descarga.
+	if s.reserveArt(k) {
+		t.Error("no debe poder reservarse otra vez: ya hay una descarga en curso")
+	}
+}

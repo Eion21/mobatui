@@ -625,6 +625,7 @@ func itemArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
 	type job struct {
 		key artKey
 		id  int
+		gen int
 	}
 	var jobs []job
 	for _, id := range ids {
@@ -645,7 +646,7 @@ func itemArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
 		if !s.reserveArt(key) {
 			continue
 		}
-		jobs = append(jobs, job{key: key, id: id})
+		jobs = append(jobs, job{key: key, id: id, gen: s.artGenOf(key)})
 	}
 	if len(jobs) == 0 {
 		return nil
@@ -654,7 +655,7 @@ func itemArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
 		out := make(map[artKey]string, len(jobs))
 		defer func() {
 			for _, j := range jobs {
-				s.releaseArt(j.key)
+				s.releaseArt(j.key, j.gen)
 			}
 		}()
 		for _, j := range jobs {
@@ -892,6 +893,7 @@ func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
 	type job struct {
 		key artKey
 		id  int
+		gen int
 	}
 	var jobs []job
 	for _, id := range ids {
@@ -912,7 +914,7 @@ func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
 		if !s.reserveArt(key) {
 			continue // ya hay una descarga en curso para esta clave
 		}
-		jobs = append(jobs, job{key: key, id: id})
+		jobs = append(jobs, job{key: key, id: id, gen: s.artGenOf(key)})
 	}
 	if len(jobs) == 0 {
 		return nil
@@ -924,7 +926,7 @@ func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
 		out := make(map[artKey]string, len(jobs))
 		defer func() {
 			for _, j := range jobs {
-				s.releaseArt(j.key)
+				s.releaseArt(j.key, j.gen)
 			}
 		}()
 		for _, j := range jobs {

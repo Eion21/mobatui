@@ -31,7 +31,7 @@ func BenchmarkReserveArt(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		k := artKey{Kind: artItem, ID: 3026, Cols: 3 + (i % 3), Mode: artHalfBlock, Patch: "16.21"}
 		s.reserveArt(k)
-		s.releaseArt(k)
+		s.releaseArt(k, s.artGenOf(k))
 	}
 }
 

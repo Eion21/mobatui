@@ -145,6 +145,11 @@ type Session struct {
 	runePending map[artResource]int
 	// pendingKeys evita reservar dos veces la misma representación.
 	pendingKeys map[artKey]bool
+	// artGen se incrementa en cada invalidación. Una descarga en vuelo
+	// que termina DESPUÉS no debe tocar los contadores de la generación
+	// nueva: keyGen recuerda a qué generación pertenece cada reserva.
+	keyGen map[artKey]int
+	artGen int
 	// artFailed recuerda por qué una clave no tiene arte, y solo para
 	// los fallos DEFINITIVOS (ver artFailure). Un fallo transitorio NO
 	// se apunta: si la red vuelve, el icono debe poder recuperarse.
@@ -322,6 +327,10 @@ func (s *Session) reserveArt(key artKey) bool {
 		return false
 	}
 	s.pendingKeys[key] = true
+	if s.keyGen == nil {
+		s.keyGen = map[artKey]int{}
+	}
+	s.keyGen[key] = s.artGen
 	res := s.resourceForLocked(key)
 	s.runePending[res]++
 	// Solo el primer interesado lanza la descarga.
@@ -333,27 +342,40 @@ func (s *Session) reserveArt(key artKey) bool {
 // Debe llamarse SIEMPRE (éxito, 404, corrupto, transitorio) o la clave
 // quedaría bloqueada para siempre. Un intento posterior solo se relanza
 // cuando el contador de referencias llega a cero.
-func (s *Session) releaseArt(key artKey) {
+func (s *Session) releaseArt(key artKey, gen int) {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
-	if s.pendingKeys != nil {
-		delete(s.pendingKeys, key)
-	}
 	if s.runePending == nil {
 		return
 	}
-	res := s.resourceForLocked(key)
-	// Un Cmd en vuelo puede terminar DESPUÉS de InvalidateArt, que ya
-	// reinició los mapas. Solo se decrementa si el recurso sigue
-	// reservado: un contador negativo dejaría el recurso bloqueado para
-	// siempre (nunca llegaría a cero otra vez).
-	if _, vivo := s.runePending[res]; !vivo {
+	// Un Cmd en vuelo puede terminar DESPUÉS de InvalidateArt, que abrió
+	// una generación nueva con los mapas vacíos. Su liberación pertenece
+	// a la generación vieja y no debe restar una referencia de la nueva:
+	// llegaría a 0 y borraría la reserva de un Cmd nuevo, que entonces
+	// podría descargarse dos veces.
+	if gen != s.artGen {
 		return
 	}
+	if s.pendingKeys != nil {
+		delete(s.pendingKeys, key)
+	}
+	if s.keyGen != nil {
+		delete(s.keyGen, key)
+	}
+	res := s.resourceForLocked(key)
 	s.runePending[res]--
 	if s.runePending[res] <= 0 {
 		delete(s.runePending, res)
 	}
+}
+
+// artGenOf devuelve la generación vigente. Quien reserva la guarda y la
+// pasa a releaseArt al terminar, para no liberar reservas de una
+// generación posterior a una invalidación.
+func (s *Session) artGenOf(key artKey) int {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	return s.keyGen[key]
 }
 
 // pendingFor indica cuántas claves esperan el recurso de esta clave.
@@ -377,6 +399,8 @@ func (s *Session) InvalidateRuneArt() {
 	s.RuneArt = map[artKey]string{}
 	s.runePending = map[artResource]int{}
 	s.pendingKeys = map[artKey]bool{}
+	s.keyGen = map[artKey]int{}
+	s.artGen++
 }
 
 // ItemArtFor devuelve el arte de un ítem para el tamaño y modo dados.
@@ -398,9 +422,13 @@ func (s *Session) InvalidateArt() {
 	s.ItemArt = map[artKey]string{}
 	s.artFailed = map[artResource]artFailure{}
 	// Las reservas también se reinician: una reserva viva sin su Cmd
-	// dejaría el recurso bloqueado para siempre en esta sesión.
+	// dejaría el recurso bloqueado para siempre en esta sesión. La
+	// generación sube para que las descargas en vuelo no liberen
+	// reservas de la generación nueva al terminar.
 	s.runePending = map[artResource]int{}
 	s.pendingKeys = map[artKey]bool{}
+	s.keyGen = map[artKey]int{}
+	s.artGen++
 }
 
 // ItemName resuelve el nombre real de un ítem con fallback.
