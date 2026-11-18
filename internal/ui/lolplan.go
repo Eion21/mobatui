@@ -663,28 +663,33 @@ func itemArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
 				// Solo los fallos DEFINITIVOS (404/410) se memorizan;
 				// un error de red no debe impedir recuperar el icono
 				// cuando vuelva la conexión.
-				s.markArtFailed(j.key, classifyArtError(err))
+				s.markArtFailedForResource(j.key, classifyArtError(err))
 				continue
 			}
 			if len(raw) == 0 {
 				// Respuesta vacía sin error: sin cuerpo no hay imagen, y
 				// reintentarlo daría lo mismo.
-				s.markArtFailed(j.key, artFailMissing)
+				s.markArtFailedForResource(j.key, artFailMissing)
 				continue
 			}
 			img, err := png.Decode(bytes.NewReader(raw))
 			if err != nil {
 				// PNG corrupto: el cuerpo llegó pero no es válido para
 				// este parche; reintentarlo daría el mismo resultado.
-				s.markArtFailed(j.key, artFailCorrupt)
+				s.markArtFailedForResource(j.key, artFailCorrupt)
 				continue
 			}
-			// UNA fila SIEMPRE. RenderAspect calcularía rows =
-			// cols*alto/ancho/2 (3 filas a 6 columnas), y eso rompería
-			// el formato "una compra, una línea". En una sola fila el
-			// icono solo tiene 2 píxeles verticales, así que el ancho
-			// es la única dimensión que aporta detalle.
-			out[j.key] = imgrender.Render(img, cols, 1, panelBg)
+			// Una sola descarga alimenta TODAS las claves pendientes de
+			// este recurso (3, 4 y 6 columnas, y otros modos), cada una
+			// con su propia representación.
+			for _, k := range s.pendingKeysFor(s.resourceForLocked(j.key)) {
+				// UNA fila SIEMPRE. RenderAspect calcularía rows =
+				// cols*alto/ancho/2 (3 filas a 6 columnas) y rompería el
+				// formato "una compra, una línea". En una sola fila el
+				// icono tiene 2 píxeles verticales: el ancho es la única
+				// dimensión que aporta detalle.
+				out[k] = imgrender.Render(img, k.Cols, 1, panelBg)
+			}
 		}
 		return artLoadedMsg{Art: out}
 	}
@@ -924,7 +929,12 @@ func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
 			if err != nil {
 				continue
 			}
-			out[j.key] = imgrender.RenderAspect(img, runeArtCols, panelBg)
+			// Igual que en los ítems: una sola descarga alimenta todas
+			// las claves que esperaban este recurso. Las runas mantienen
+			// su representación propia (RenderAspect, varias filas).
+			for _, k := range s.pendingKeysFor(s.resourceForLocked(j.key)) {
+				out[k] = imgrender.RenderAspect(img, k.Cols, panelBg)
+			}
 		}
 		return artLoadedMsg{Art: out}
 	}

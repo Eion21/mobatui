@@ -138,9 +138,13 @@ type Session struct {
 	//
 	// runeArtMu protege el mapa: la goroutine del Cmd escribe y el bucle
 	// de Update/View lee.
-	runeArtMu   sync.RWMutex
-	RuneArt     map[artKey]string
-	runePending map[artKey]bool
+	runeArtMu sync.RWMutex
+	RuneArt   map[artKey]string
+	// runePending cuenta por RECURSO cuántas claves esperan la misma
+	// descarga (ver reserveArt).
+	runePending map[artResource]int
+	// pendingKeys evita reservar dos veces la misma representación.
+	pendingKeys map[artKey]bool
 	// artFailed recuerda por qué una clave no tiene arte, y solo para
 	// los fallos DEFINITIVOS (ver artFailure). Un fallo transitorio NO
 	// se apunta: si la red vuelve, el icono debe poder recuperarse.
@@ -291,7 +295,15 @@ func (s *Session) hasArt(key artKey) bool {
 	return ok
 }
 
-// runeArtPending marca una descarga en curso para no duplicarla.
+// reserveArt registra que se va a descargar el RECURSO de la clave.
+//
+// Devuelve true solo la PRIMERA vez que se reserva ese recurso: las demás
+// claves que lo esperan (distintos anchos y modos del mismo icono) no
+// duplican la descarga. La reserva lleva un contador de referencias, de
+// modo que se libera cuando termina el ÚLTIMO interesado y no el primero.
+//
+// Antes se indexaba por artKey, que incluye las columnas: lanzar 3, 4 y 6
+// columnas sin resolver provocaba TRES descargas del mismo PNG.
 func (s *Session) reserveArt(key artKey) bool {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
@@ -299,20 +311,49 @@ func (s *Session) reserveArt(key artKey) bool {
 		return false
 	}
 	if s.runePending == nil {
-		s.runePending = map[artKey]bool{}
+		s.runePending = map[artResource]int{}
 	}
-	if s.runePending[key] {
+	// La espera se anota también por clave para no re-renderizar dos
+	// veces la misma representación.
+	if s.pendingKeys == nil {
+		s.pendingKeys = map[artKey]bool{}
+	}
+	if s.pendingKeys[key] {
 		return false
 	}
-	s.runePending[key] = true
-	return true
+	s.pendingKeys[key] = true
+	res := s.resourceForLocked(key)
+	s.runePending[res]++
+	// Solo el primer interesado lanza la descarga.
+	return s.runePending[res] == 1
 }
 
-// releaseArt libera la reserva (haya o no arte).
+// releaseArt libera la reserva del recurso de la clave.
+//
+// Debe llamarse SIEMPRE (éxito, 404, corrupto, transitorio) o la clave
+// quedaría bloqueada para siempre. Un intento posterior solo se relanza
+// cuando el contador de referencias llega a cero.
 func (s *Session) releaseArt(key artKey) {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
-	delete(s.runePending, key)
+	if s.pendingKeys != nil {
+		delete(s.pendingKeys, key)
+	}
+	if s.runePending == nil {
+		return
+	}
+	res := s.resourceForLocked(key)
+	s.runePending[res]--
+	if s.runePending[res] <= 0 {
+		delete(s.runePending, res)
+	}
+}
+
+// pendingFor indica cuántas claves esperan el recurso de esta clave.
+func (s *Session) pendingFor(key artKey) int {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	return s.runePending[s.resourceForLocked(key)]
 }
 
 // RuneArtFor devuelve el arte de una runa o "" si no está disponible.
@@ -327,7 +368,8 @@ func (s *Session) InvalidateRuneArt() {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
 	s.RuneArt = map[artKey]string{}
-	s.runePending = map[artKey]bool{}
+	s.runePending = map[artResource]int{}
+	s.pendingKeys = map[artKey]bool{}
 }
 
 // ItemArtFor devuelve el arte de un ítem para el tamaño y modo dados.
@@ -1773,4 +1815,47 @@ func (s *Session) markArtFailed(key artKey, kind artFailure) {
 		s.artFailed = map[artResource]artFailure{}
 	}
 	s.artFailed[s.resourceForLocked(key)] = kind
+}
+
+// pendingKeysFor devuelve todas las claves que esperan el recurso dado.
+//
+// Una sola descarga del recurso debe producir arte para TODAS ellas,
+// cada una con su representación (columnas y modo propios). Sin esto, la
+// deduplicación evitaría la descarga repetida pero dejaría sin icono a
+// los anchos que no fueron el primero en reservar.
+func (s *Session) pendingKeysFor(res artResource) []artKey {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	var out []artKey
+	for k := range s.pendingKeys {
+		if s.resourceForLocked(k) == res {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// markArtFailedForResource registra el fallo para TODAS las claves que
+// esperan el recurso de key, no solo para key.
+//
+// La descarga es única por recurso: si falla, fallan todas las
+// representaciones que la esperaban. Dejar las demás sin marcar haría que
+// el siguiente evento las volviera a pedir de inmediato.
+func (s *Session) markArtFailedForResource(key artKey, kind artFailure) {
+	s.markArtFailed(key, kind)
+	if kind != artFailMissing {
+		return
+	}
+	res := s.resourceForLocked(key)
+	s.runeArtMu.RLock()
+	var otras []artKey
+	for k := range s.pendingKeys {
+		if k != key && s.resourceForLocked(k) == res {
+			otras = append(otras, k)
+		}
+	}
+	s.runeArtMu.RUnlock()
+	for _, k := range otras {
+		s.markArtFailed(k, kind)
+	}
 }
