@@ -37,7 +37,7 @@ type planFixture struct {
 }
 
 // loadPlanFixture carga el fixture de planes por clave.
-func loadPlanFixture(t *testing.T, key string) planFixture {
+func loadPlanFixture(t testing.TB, key string) planFixture {
 	t.Helper()
 	raw, err := os.ReadFile("../../testdata/lolbuild/plans-16.21.json")
 	if err != nil {
@@ -55,7 +55,7 @@ func loadPlanFixture(t *testing.T, key string) planFixture {
 }
 
 // loadItemCatalog carga el catálogo enriquecido desde el fixture.
-func loadItemCatalog(t *testing.T) map[int]lolitems.Item {
+func loadItemCatalog(t testing.TB) map[int]lolitems.Item {
 	t.Helper()
 	raw, err := os.ReadFile("../../testdata/ddragon/items-catalog.json")
 	if err != nil {
@@ -172,7 +172,7 @@ func buildCleanFromPlan(f planFixture) *model.CleanBuild {
 
 // planSession construye una sesión de LoL con el catálogo enriquecido y
 // el campeón indicado con datos de Lolalytics.
-func planSession(t *testing.T, key, champName string) (*Session, *ChampEntry) {
+func planSession(t testing.TB, key, champName string) (*Session, *ChampEntry) {
 	t.Helper()
 	f := loadPlanFixture(t, key)
 	cb := buildCleanFromPlan(f)
@@ -190,9 +190,10 @@ func planSession(t *testing.T, key, champName string) (*Session, *ChampEntry) {
 	s := &Session{
 		Game:        model.GameLoL,
 		ChampionArt: map[string]champArt{},
-		ItemArt:     map[int]string{},
+		ItemArt:     map[artKey]string{},
 		ItemCatalog: loadItemCatalog(t),
 		Version:     f.Patch,
+		Provider:    ddc,
 		Names:       Names{Heroes: map[string]staticdata.HeroInfo{}, Items: map[int]string{}},
 	}
 	// Nombres de ítem desde el catálogo (los iconos usan ItemArt).
@@ -211,7 +212,7 @@ func planSession(t *testing.T, key, champName string) (*Session, *ChampEntry) {
 }
 
 // planDetailView construye la vista de detalle del fixture.
-func planDetailView(t *testing.T, key, champName string, width, height int) detailView {
+func planDetailView(t testing.TB, key, champName string, width, height int) detailView {
 	t.Helper()
 	s, champ := planSession(t, key, champName)
 	d := newDetailView(champ, s)

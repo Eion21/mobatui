@@ -60,7 +60,7 @@ func diagSession(t *testing.T) *Session {
 		Game:      model.GameDeadlock,
 		Builds:    builds,
 		Names:     Names{Items: names},
-		ItemArt:   map[int]string{},
+		ItemArt:   map[artKey]string{},
 		ItemMeta:  meta,
 		Routes:    map[string][]RouteStep{},
 		Champions: groupByChampion(builds, heroes, game.For(model.GameDeadlock).Roles),

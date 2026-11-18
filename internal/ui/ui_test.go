@@ -66,7 +66,7 @@ var errNoNet = noNetErr{}
 
 // testLoader construye el loader con Data Dragon sin red (respaldo
 // local) y el proveedor de Deadlock desde fixtures.
-func testLoader(t *testing.T) Loader {
+func testLoader(t testing.TB) Loader {
 	t.Helper()
 	c, err := cache.New(filepath.Join(t.TempDir(), "cache"))
 	if err != nil {
@@ -87,7 +87,7 @@ func testLoader(t *testing.T) Loader {
 	}
 }
 
-func loadOffline(t *testing.T, g model.Game) *Session {
+func loadOffline(t testing.TB, g model.Game) *Session {
 	t.Helper()
 	s, err := LoadSession(g, testLoader(t))
 	if err != nil {
@@ -96,7 +96,7 @@ func loadOffline(t *testing.T, g model.Game) *Session {
 	return s
 }
 
-func findChampion(t *testing.T, s *Session, key string) *ChampEntry {
+func findChampion(t testing.TB, s *Session, key string) *ChampEntry {
 	t.Helper()
 	for _, e := range s.Champions {
 		if e.Key == key {
@@ -163,7 +163,7 @@ func TestItemArtIncluyeWards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.ItemArt[2055]; !ok {
+	if s.ItemArtFor(2055, 12) == "" {
 		t.Error("el ward 2055 no fue pre-renderizado junto a core y botas")
 	}
 }
@@ -237,7 +237,7 @@ func TestLoadSessionDeadlock(t *testing.T) {
 	if strings.Contains(art.ASCII, "▀") {
 		t.Error("la variante ASCII no debía usar half-blocks")
 	}
-	if _, ok := s.ItemArt[101]; !ok {
+	if s.ItemArtFor(101, 12) == "" {
 		t.Error("sin arte para el ítem 101")
 	}
 }
