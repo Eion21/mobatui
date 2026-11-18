@@ -155,6 +155,11 @@ type Plan struct {
 	Reason string
 	// Total son las partidas de la muestra.
 	Total model.Stats
+
+	// Catalog es el catálogo con el que se construyó el plan. Se usa
+	// para verificar que un candidato es un objeto completo y no un
+	// componente, consumible o ward. No se expone en la UI.
+	Catalog map[int]lolitems.Item
 	// WinRate es el WR del campeón/rol en el parche.
 	WinRate float64
 	// Evidence resume el nivel de evidencia dominante del plan.
@@ -231,6 +236,7 @@ func (o *Options) fill() {
 func BuildPlan(cb *model.CleanBuild, catalog map[int]lolitems.Item, opts Options) Plan {
 	opts.fill()
 	p := Plan{
+		Catalog:      catalog,
 		ChampionID:   cb.ChampionID,
 		ChampionKey:  cb.ChampionKey,
 		ChampionName: cb.ChampionName,
@@ -725,4 +731,135 @@ func (p Plan) GroupFor(cat lolitems.Category) (CategoryGroup, bool) {
 		}
 	}
 	return CategoryGroup{}, false
+}
+
+// ─── candidatos para completar el inventario ──────────────────────
+
+// maxCandidates es cuántos candidatos se muestran. Pocos, para no
+// saturar la terminal: 3 basta para orientar sin abrumar.
+const maxCandidates = 3
+
+// Candidate es un objeto que PODRÍA completar el inventario.
+//
+// No es una compra observada: la fuente no publica inventarios finales
+// ni coocurrencia con la build concreta. Solo se conoce la estadística
+// del objeto en el campeón/rol/parche actual.
+type Candidate struct {
+	Item     int
+	Name     string
+	Stats    model.Stats
+	WinRate  float64
+	PickRate float64
+}
+
+// CandidatesFor devuelve objetos que podrían completar el inventario,
+// derivados de las alternativas YA calculadas por el planner.
+//
+// Reglas (todas verificables):
+//   - Solo si el plan está INCOMPLETO: con inventario lleno no hay hueco
+//     que completar y proponer algo sería inventar una decisión.
+//   - Excluye lo que ya está en el inventario final (no duplica).
+//   - Excluye componentes, consumibles, wards y botas.
+//   - No reordena ni reinterpreta item1..item5: son otra cosa.
+//   - No aplica ranking nuevo: reutiliza el orden que ya trae el plan.
+//
+// El llamador DEBE presentarlos como candidatos sin orden observado,
+// nunca como una sexta compra.
+func (p Plan) CandidatesFor() []Candidate {
+	if p.Complete {
+		return nil
+	}
+	if len(p.Alternatives) == 0 {
+		return nil
+	}
+	eq := map[int]bool{}
+	for _, id := range p.Final {
+		eq[id] = true
+	}
+	for _, id := range p.FinalMain {
+		eq[id] = true
+	}
+	for _, s := range p.Steps {
+		eq[s.Item] = true
+	}
+	for _, b := range p.Boots {
+		eq[b.Item] = true
+	}
+
+	seen := map[int]bool{}
+	var out []Candidate
+	for _, g := range p.Alternatives {
+		if g.Category == lolitems.CatBoots {
+			continue
+		}
+		for _, a := range g.Items {
+			if len(out) >= maxCandidates {
+				return out
+			}
+			if a.Item <= 0 || eq[a.Item] || seen[a.Item] {
+				continue
+			}
+			if !isCompletableCandidate(a.Item, g.Category, p.Catalog) {
+				continue
+			}
+			if a.Stats.Games <= 0 {
+				continue
+			}
+			seen[a.Item] = true
+			out = append(out, Candidate{
+				Item:     a.Item,
+				Name:     a.Name,
+				Stats:    a.Stats,
+				WinRate:  a.WinRate,
+				PickRate: a.PickRate,
+			})
+		}
+	}
+	return out
+}
+
+// isCompletableCandidate decide si un objeto puede COMPLETAR un
+// inventario. No se fía de que otro componente lo haya filtrado antes:
+// aplica las reglas del catálogo aquí mismo.
+//
+// Rechaza, en este orden:
+//  1. Ids inválidos.
+//  2. Botas: ocupan espacio propio (o ranura de misión) y nunca son el
+//     objeto que falta.
+//  3. Objetos de misión: se obtienen por misión, no se compran.
+//  4. Todo lo que el catálogo marca como no elegible: consumibles,
+//     trinkets, wards, componentes, recetas especiales, fuera de tienda,
+//     mapa distinto o sin etiquetas.
+//
+// Conserva las estadísticas y el ranking: solo filtra qué objetos son
+// candidatos, no cómo se ordenan.
+func isCompletableCandidate(item int, cat lolitems.Category, catalog map[int]lolitems.Item) bool {
+	if item <= 0 {
+		return false
+	}
+	if cat == lolitems.CatBoots {
+		return false
+	}
+	if lolitems.IsQuestItem(item) {
+		return false
+	}
+	if catalog != nil {
+		if it, ok := catalog[item]; ok {
+			// Eligible aplica las reglas de la fuente (consumible,
+			// trinket, componente, no comprable, mapa...).
+			if !lolitems.Eligible(it) {
+				return false
+			}
+			if lolitems.IsBoots(it) {
+				return false
+			}
+		}
+		// Sin entrada en el catálogo no se puede demostrar que sea un
+		// objeto completo: se descarta. Es preferible no proponer nada a
+		// proponer un componente.
+		if _, ok := catalog[item]; !ok {
+			return false
+		}
+	}
+	return true
 }
