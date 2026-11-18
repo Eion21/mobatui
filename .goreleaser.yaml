@@ -51,12 +51,12 @@ archives:
   # mobatui-render solo en las de amd64. GoReleaser rechaza un archivo
   # que mezcle binarios con distinto número de plataformas.
   - id: mobatui
-    builds:
+    ids:
       - mobatui
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
   - id: render
-    builds:
+    ids:
       - render
     name_template: >-
       {{ .ProjectName }}-render_{{ .Version }}_{{ .Os }}_{{ .Arch }}
