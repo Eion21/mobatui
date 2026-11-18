@@ -1792,6 +1792,19 @@ func (s *Session) resourceForLocked(key artKey) artResource {
 // tipo no basta: dos clientes del mismo tipo con distinto baseURL
 // compartirían fallos, de modo que un 404 contra un CDN dejaría sin
 // icono el mismo id servido por otro.
+//
+// ALCANCE DE LA IDENTIDAD: vive lo que vive la instancia del proveedor
+// dentro de la sesión. El diseño depende de que cada carga cree sesión y
+// proveedor NUEVOS: LoadSession (app.go) construye una &Session{} con
+// ItemArt, RuneArt y artFailed vacíos y le asigna l.Providers[g], y es la
+// ÚNICA asignación de Provider en producción. Por tanto:
+//
+//   - Un cambio de parche o de juego trae sesión nueva ⇒ mapa de fallos
+//     vacío ⇒ se vuelve a pedir. Correcto.
+//   - Si algún día se reutilizara la sesión cambiando solo Provider, los
+//     fallos de la instancia anterior ya no aplicarían (la dirección es
+//     distinta), que es el comportamiento conservador deseado: un
+//     proveedor nuevo puede tener el icono.
 func providerOrigin(p staticdata.Provider) string {
 	if p == nil {
 		return "none"

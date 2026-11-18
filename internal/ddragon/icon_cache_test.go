@@ -327,3 +327,17 @@ func TestValidadorDetectaTruncadoAMitad(t *testing.T) {
 		t.Error("un cuerpo sin firma PNG debe rechazarse")
 	}
 }
+
+// BenchmarkValidatePNG mide el validador de iconos sobre un PNG real de
+// 64x64. Justifica la elección frente a png.Decode completo.
+func BenchmarkValidatePNG(b *testing.B) {
+	raw := pngValido(&testing.T{})
+	b.ReportAllocs()
+	b.SetBytes(int64(len(raw)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := ValidatePNG(raw); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -720,3 +720,39 @@ func TestOrigenDistingueInstanciasDelMismoTipo(t *testing.T) {
 		t.Error("otra instancia del mismo tipo es otro origen: no debe compartir el 404")
 	}
 }
+
+// TestProveedorNuevoNoHeredaFallos fija el alcance de providerOrigin:
+// la identidad vive lo que vive la instancia del proveedor. Una sesión
+// nueva (o un proveedor nuevo en la misma sesión) no arrastra los
+// fallos, de modo que cada LoadSession parte de cero.
+func TestProveedorNuevoNoHeredaFallos(t *testing.T) {
+	nuevo := func() *ddragon.Client {
+		c, err := cache.New(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ddragon.New(c, t.TempDir(), "es_ES")
+	}
+	k := artKey{Kind: artItem, ID: 7, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}
+
+	// Sesión 1: 404 registrado con su proveedor.
+	s1 := &Session{Game: model.GameLoL, ItemArt: map[artKey]string{},
+		ChampionArt: map[string]champArt{}, Version: "16.21", Provider: nuevo()}
+	s1.markArtFailed(k, artFailMissing)
+	if !s1.artDidFail(k) {
+		t.Fatal("debía constar en la sesión 1")
+	}
+
+	// Sesión 2 (como la crea LoadSession): mapas vacíos y proveedor nuevo.
+	s2 := &Session{Game: model.GameLoL, ItemArt: map[artKey]string{},
+		ChampionArt: map[string]champArt{}, Version: "16.21", Provider: nuevo()}
+	if s2.artDidFail(k) {
+		t.Error("una sesión nueva no debe heredar fallos de otra")
+	}
+
+	// Y en la MISMA sesión, cambiar a otra instancia tampoco los hereda.
+	s1.Provider = nuevo()
+	if s1.artDidFail(k) {
+		t.Error("otra instancia de proveedor no debe heredar el fallo")
+	}
+}
