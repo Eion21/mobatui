@@ -1,62 +1,133 @@
 package cache
 
 import (
+	"bytes"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-// BenchmarkGetWarm mide leer una entrada ya cacheada desde disco
-// (descomprimir gzip incluido): el coste que paga cada petición servida.
-func BenchmarkGetWarm(b *testing.B) {
-	home, _ := os.UserCacheDir()
-	src := filepath.Join(home, "mobatui", "cache")
-	if _, err := os.Stat(src); err != nil {
-		b.Skip("sin caché personal")
+// iconoBench es un PNG real del repositorio (3.883 B), sin usar la caché
+// del usuario.
+func iconoBench(b *testing.B) []byte {
+	b.Helper()
+	raw, err := os.ReadFile("../../testdata/ddragon/3026.png")
+	if err != nil {
+		b.Skip("sin fixture")
 	}
-	// Copia de UNA entrada a un directorio temporal: se mide lectura,
-	// no se escribe en la caché del usuario.
-	key := "4b43fa6444d89a63d53ab62e5aa2909f"
-	tmp := b.TempDir()
-	for _, name := range []string{key + ".json", key + ".json.body.gz"} {
-		raw, err := os.ReadFile(filepath.Join(src, name))
-		if err != nil {
-			b.Skipf("falta %s", name)
-		}
-		if err := os.WriteFile(filepath.Join(tmp, name), raw, 0o644); err != nil {
-			b.Fatal(err)
-		}
+	return raw
+}
+
+// validadorBench replica el coste del validador real sin importar el
+// paquete ddragon (evita un ciclo de importación desde un _test).
+func validadorBench(body []byte) error {
+	if !bytes.HasPrefix(body, []byte("\x89PNG\r\n\x1a\n")) {
+		return errInvalido
 	}
-	c, err := New(tmp)
+	return nil
+}
+
+var errInvalido = bytes.ErrTooLarge
+
+func cacheBench(b *testing.B) *Cache {
+	dir := b.TempDir()
+	c, err := New(dir)
 	if err != nil {
 		b.Fatal(err)
 	}
-	c.Offline = true
+	return c
+}
 
+// BenchmarkGetValidatedHit: lectura de un hit fresco con validador.
+func BenchmarkGetValidatedHit(b *testing.B) {
+	c := cacheBench(b)
+	raw := iconoBench(b)
+	const k = "https://cdn/icono.png"
+	if _, err := c.GetValidated(k, 720*time.Hour, func() ([]byte, error) { return raw, nil }, validadorBench); err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		res, err := c.Get("https://lolalytics.com/lol/kaisa/build/?lane=bottom", time.Hour, func() ([]byte, error) {
-			return nil, os.ErrNotExist
-		})
-		if err != nil || res.Body == nil {
-			b.Skipf("no se pudo leer: %v", err)
+		if _, err := c.GetValidated(k, 720*time.Hour, func() ([]byte, error) {
+			b.Fatal("no debe hacer fetch")
+			return nil, nil
+		}, validadorBench); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
 
-// BenchmarkGetMiss mide el camino de fallo (sin entrada): debe ser barato.
-func BenchmarkGetMiss(b *testing.B) {
-	c, err := New(b.TempDir())
-	if err != nil {
+// BenchmarkGetValidatedHitSinValidador es la referencia: el mismo hit
+// sin pagar el validador.
+func BenchmarkGetValidatedHitSinValidador(b *testing.B) {
+	c := cacheBench(b)
+	raw := iconoBench(b)
+	const k = "https://cdn/icono.png"
+	if _, err := c.Get(k, 720*time.Hour, func() ([]byte, error) { return raw, nil }); err != nil {
 		b.Fatal(err)
 	}
-	c.Offline = true
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = c.Get("https://ejemplo.invalido/nada", time.Hour, func() ([]byte, error) {
-			return nil, os.ErrNotExist
-		})
+		if _, err := c.Get(k, 720*time.Hour, func() ([]byte, error) {
+			b.Fatal("no debe hacer fetch")
+			return nil, nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkGetValidatedMiss: descarga simulada + validación + store.
+func BenchmarkGetValidatedMiss(b *testing.B) {
+	c := cacheBench(b)
+	raw := iconoBench(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		k := "https://cdn/icono-" + string(rune('a'+i%26)) + ".png"
+		if _, err := c.GetValidated(k, 720*time.Hour, func() ([]byte, error) { return raw, nil }, validadorBench); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkGetValidatedHitEnvenenadoMideRecarga: la entrada en disco es
+// inválida, así que cada lectura la descarta, valida el cuerpo nuevo y
+// lo reescribe.
+func BenchmarkGetValidatedHitEnvenenadoMideRecarga(b *testing.B) {
+	c := cacheBench(b)
+	raw := iconoBench(b)
+	const k = "https://cdn/envenenado.png"
+	// Se siembra sin validador.
+	if _, err := c.Get(k, 720*time.Hour, func() ([]byte, error) {
+		return []byte("BASURA"), nil
+	}); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := c.GetValidated(k, 720*time.Hour, func() ([]byte, error) { return raw, nil }, validadorBench); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkDiscard es el coste puro de descartar la entrada envenenada:
+// dos os.Remove, sin lectura ni escritura de cuerpos.
+func BenchmarkDiscard(b *testing.B) {
+	c := cacheBench(b)
+	const k = "https://cdn/x.png"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		if _, err := c.Get(k, time.Hour, func() ([]byte, error) { return []byte("x"), nil }); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		c.discard(k)
 	}
 }
