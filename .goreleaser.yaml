@@ -11,6 +11,18 @@ builds:
     binary: mobatui
     env:
       - CGO_ENABLED=0
+    # -trimpath elimina las rutas absolutas del binario: sin él, dos
+    # compilaciones del mismo commit producen hashes distintos y los
+    # manifiestos publicados apuntarían a un SHA que no coincide con el
+    # artefacto real. Verificado: sin -trimpath, el hash cambia entre
+    # ejecuciones; con él, es estable.
+    flags:
+      - -trimpath
+    # Fecha fija en los archivos empaquetados: sin esto cada ejecución
+    # produce un .tar.gz con mtime distinto y, por tanto, un SHA-256
+    # distinto. Los manifiestos apuntarían a un hash que no coincide con
+    # el artefacto publicado. Verificado.
+    mod_timestamp: '{{ .CommitTimestamp }}'
     # {{.Version}} ya viene sin la "v" del tag. Inyectarla hace que
     # `mobatui --version` anuncie la versión real aunque los metadatos
     # VCS del build digan "+dirty".
@@ -36,6 +48,18 @@ builds:
     binary: mobatui-render
     env:
       - CGO_ENABLED=0
+    # -trimpath elimina las rutas absolutas del binario: sin él, dos
+    # compilaciones del mismo commit producen hashes distintos y los
+    # manifiestos publicados apuntarían a un SHA que no coincide con el
+    # artefacto real. Verificado: sin -trimpath, el hash cambia entre
+    # ejecuciones; con él, es estable.
+    flags:
+      - -trimpath
+    # Fecha fija en los archivos empaquetados: sin esto cada ejecución
+    # produce un .tar.gz con mtime distinto y, por tanto, un SHA-256
+    # distinto. Los manifiestos apuntarían a un hash que no coincide con
+    # el artefacto publicado. Verificado.
+    mod_timestamp: '{{ .CommitTimestamp }}'
     goos:
       - linux
       - darwin
@@ -55,6 +79,13 @@ archives:
       - mobatui
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    # WinGet y Scoop NO aceptan .tar.gz: sus manifiestos declaran un
+    # instalador portable y esperan .zip. Solo se cambia Windows; el
+    # resto de plataformas conserva el .tar.gz de siempre, así que las
+    # URLs ya publicadas siguen siendo válidas.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
   - id: render
     ids:
       - render
@@ -75,8 +106,111 @@ nfpms:
       - src: README.md
         dst: /usr/share/doc/mobatui/README.md
 
-# Homebrew y Scoop quedan fuera hasta que existan los repositorios tap y
-# bucket: GoReleaser falla si el repositorio destino no existe.
+# ---------------------------------------------------------------------
+# Gestores de paquetes
+#
+# Los tres se generan desde los artefactos ya publicados.
+#
+# SEGURIDAD: el workflow de release los SALTA con
+#   --skip=winget,scoop,homebrew
+# de modo que publicar la release nunca depende de que un gestor externo
+# responda. La actualización de manifiestos es un workflow aparte que se
+# ejecuta a mano (workflow_dispatch) y solo escribe en sus repositorios.
+#
+# NO se usa skip_upload con plantilla: sprig no está disponible, y
+# {{ .Env.X }} sin la variable definida ABORTA la release entera
+# (verificado: "map has no entry for key"). Un fallo de un gestor de
+# paquetes no puede tumbar la publicación de los binarios.
+# ---------------------------------------------------------------------
+
+# Homebrew Cask para macOS: instala el binario precompilado, sin compilar
+# desde fuente. Ambos arquitecturas salen del mismo Cask.
+homebrew_casks:
+  - name: mobatui
+    ids:
+      - mobatui
+    repository:
+      owner: Eion21
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/Eion21/mobatui
+    description: MOBA builds and stats for Deadlock and League of Legends in your terminal
+    license: MIT
+    # SEGURO POR DEFECTO: no escribe en el tap salvo que el workflow de
+    # publicación lo active con .goreleaser-publish.yaml. Este valor es
+    # estático a propósito (nunca una plantilla: {{ .Env.X }} sin la
+    # variable definida aborta la release entera).
+    skip_upload: true
+    # SIN hooks. El binario no está firmado ni notarizado, así que macOS
+    # lo marcará en cuarentena y el primer arranque mostrará el diálogo de
+    # Gatekeeper. Eso es VISIBLE y el usuario decide.
+    #
+    # Quitar com.apple.quarantine automáticamente (xattr -dr) silenciaría
+    # ese control de seguridad: el usuario instalaría sin ver la
+    # advertencia. No se hace por defecto. Ver docs/PACKAGING.md §2 para
+    # las tres alternativas y cuál se recomienda.
+
+
+# Scoop para Windows: manifiesto JSON en un bucket propio.
+scoops:
+  - name: mobatui
+    ids:
+      - mobatui
+    repository:
+      owner: Eion21
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    directory: bucket
+    homepage: https://github.com/Eion21/mobatui
+    description: MOBA builds and stats for Deadlock and League of Legends in your terminal
+    license: MIT
+    skip_upload: true
+
+
+# WinGet: genera los manifiestos de versión, instalador y locale, y abre
+# un PR contra microsoft/winget-pkgs. NO se envía solo: exige el token de
+# un fork con permiso para abrir PRs en el repositorio de Microsoft.
+winget:
+  - name: mobatui
+    ids:
+      - mobatui
+    package_identifier: Eion21.MOBATUI
+    package_name: MOBA TUI
+    publisher: Eion21
+    license: MIT
+    short_description: MOBA builds and stats for Deadlock and League of Legends in your terminal
+    description: >-
+      Terminal UI for browsing Deadlock and League of Legends builds:
+      item routes, skill order, runes, matchups and win-rate statistics
+      ranked by Wilson score.
+    homepage: https://github.com/Eion21/mobatui
+    license_url: https://github.com/Eion21/mobatui/blob/master/LICENSE
+    publisher_url: https://github.com/Eion21
+    publisher_support_url: https://github.com/Eion21/mobatui/issues
+    # Seguro por defecto, igual que cask y scoop.
+    skip_upload: true
+    tags:
+      - gaming
+      - league-of-legends
+      - deadlock
+      - tui
+      - cli
+    repository:
+      owner: Eion21
+      name: winget-pkgs
+      branch: master
+      token: "{{ .Env.WINGET_TOKEN }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
+        draft: true
+
 
 checksum:
   name_template: checksums.txt

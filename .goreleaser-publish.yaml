@@ -1,0 +1,147 @@
+# Configuración del workflow de publicación de manifiestos.
+#
+# Uso exclusivo: .github/workflows/publish-packages.yml, en LAS DOS
+# fases (generar y publicar). A propósito es el MISMO archivo:
+#
+#   Fase 1 (generar):  SKIP_PACKAGE_UPLOAD=true  -> escribe solo dist/
+#   Fase 3 (publicar): SKIP_PACKAGE_UPLOAD=false -> escribe en los repos
+#
+# Al compartir configuración, los manifiestos que se publican son byte a
+# byte los que se verificaron. No se depende de que dos archivos generen
+# lo mismo: se elimina la posibilidad de divergencia. Verificado con
+# sha256 idénticos en ambas fases.
+#
+# release.disable + url_template explícitos: sin ellos GoReleaser
+# resolvería la URL desde la release, que aquí no se toca.
+#
+# El config por defecto (.goreleaser.yaml) mantiene skip_upload: true y
+# no usa plantillas, así que `goreleaser release` normal funciona sin
+# variables de entorno y nunca escribe en un tap o bucket ajeno.
+
+version: 2
+project_name: mobatui
+
+# NO tocar la GitHub Release: ya está publicada y verificada.
+# 'disable' evita que GoReleaser la cree, la modifique o suba assets.
+# Sin esto habría que usar --skip=publish, que además omitiría cask,
+# scoop y winget (viven en la misma fase), dejando el workflow en un
+# no-op silencioso.
+release:
+  disable: true
+  mode: keep-existing
+
+# Sin anuncios: este workflow solo escribe manifiestos.
+announce:
+  skip: true
+
+builds:
+  - id: mobatui
+    main: .
+    binary: mobatui
+    env: [CGO_ENABLED=0]
+    ldflags:
+      - -s -w
+      - -X github.com/Eion21/mobatui/internal/version.injected={{ .Version }}
+      - -X github.com/Eion21/mobatui/internal/version.injectedCommit={{ .FullCommit }}
+    flags:
+      - -trimpath
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+  - id: render
+    main: ./cmd/render
+    binary: mobatui-render
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: mobatui
+    ids: [mobatui]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+  - id: render
+    ids: [render]
+    name_template: >-
+      {{ .ProjectName }}-render_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+# --- único cambio real: skip_upload desactivado -------------------------
+homebrew_casks:
+  - name: mobatui
+    ids: [mobatui]
+    repository:
+      owner: Eion21
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    # Con release.disable no hay URL de release de la que inferir la del
+    # artefacto: se declara explícita. Es la misma que generaría
+    # automáticamente un release normal (verificado en fase 1).
+    url:
+      template: "https://github.com/{{ .Env.GITHUB_REPOSITORY }}/releases/download/v{{ .Version }}/{{ .ArtifactName }}"
+    homepage: https://github.com/Eion21/mobatui
+    description: MOBA builds and stats for Deadlock and League of Legends in your terminal
+    license: MIT
+    skip_upload: '{{ .Env.SKIP_PACKAGE_UPLOAD }}'
+
+scoops:
+  - name: mobatui
+    ids: [mobatui]
+    repository:
+      owner: Eion21
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    directory: bucket
+    url_template: "https://github.com/{{ .Env.GITHUB_REPOSITORY }}/releases/download/v{{ .Version }}/{{ .ArtifactName }}"
+    homepage: https://github.com/Eion21/mobatui
+    description: MOBA builds and stats for Deadlock and League of Legends in your terminal
+    license: MIT
+    skip_upload: '{{ .Env.SKIP_PACKAGE_UPLOAD }}'
+
+winget:
+  - name: mobatui
+    ids: [mobatui]
+    package_identifier: Eion21.MOBATUI
+    package_name: MOBA TUI
+    publisher: Eion21
+    license: MIT
+    short_description: MOBA builds and stats for Deadlock and League of Legends in your terminal
+    description: >-
+      Terminal UI for browsing Deadlock and League of Legends builds:
+      item routes, skill order, runes, matchups and win-rate statistics
+      ranked by Wilson score.
+    homepage: https://github.com/Eion21/mobatui
+    license_url: https://github.com/Eion21/mobatui/blob/master/LICENSE
+    publisher_url: https://github.com/Eion21
+    publisher_support_url: https://github.com/Eion21/mobatui/issues
+    skip_upload: '{{ .Env.SKIP_PACKAGE_UPLOAD }}'
+    # WinGet también resuelve su URL por defecto desde la release; con
+    # release.disable hay que declararla.
+    url_template: "https://github.com/{{ .Env.GITHUB_REPOSITORY }}/releases/download/v{{ .Version }}/{{ .ArtifactName }}"
+    tags: [gaming, league-of-legends, deadlock, tui, cli]
+    repository:
+      owner: Eion21
+      name: winget-pkgs
+      branch: master
+      token: "{{ .Env.WINGET_TOKEN }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
+        draft: true
