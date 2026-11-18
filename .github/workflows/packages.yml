@@ -57,15 +57,40 @@ jobs:
             exit 1
           }
 
-      - name: Verify manifests
+      # Verificación ESTRUCTURAL. En un PR no hay release publicada con esa
+      # versión (el snapshot es 0.2.1-SNAPSHOT-xxxx), así que no se puede
+      # comparar contra assets reales: eso lo hace publish-packages.yml
+      # contra el tag publicado.
+      #
+      # Aquí se comprueba lo que sí es verificable sin red: que los
+      # manifiestos existen, tienen los campos obligatorios y declaran la
+      # MISMA versión que el snapshot genera.
+      - name: Verify manifest structure
         run: |
           set -euo pipefail
           VERSION=$(grep -oP '"version": "\K[^"]+' dist/scoop/bucket/mobatui.json)
           echo "versión de los manifiestos: $VERSION"
-          go run -tags packages ./cmd/pkgcheck \
-            -tag "v${VERSION%%-SNAPSHOT*}" \
-            -dist dist \
-            -no-network
+          # La versión de Scoop y la del Cask deben coincidir entre sí.
+          CSK=$(grep -oP '^\s*version "\K[^"]+' dist/homebrew/Casks/mobatui.rb | head -1)
+          echo "versión del cask: $CSK"
+          test "$VERSION" = "$CSK" || {
+            echo "::error::la versión de Scoop ($VERSION) y del Cask ($CSK) difieren"
+            exit 1
+          }
+          # El Cask debe cubrir macOS arm64 e Intel.
+          grep -q 'on_arm do' dist/homebrew/Casks/mobatui.rb || { echo "::error::falta on_arm"; exit 1; }
+          grep -q 'on_intel do' dist/homebrew/Casks/mobatui.rb || { echo "::error::falta on_intel"; exit 1; }
+          # Scoop debe apuntar al ZIP de Windows y exponer mobatui.exe.
+          grep -q '"url":.*windows_amd64\.zip' dist/scoop/bucket/mobatui.json \
+            || { echo "::error::Scoop no apunta al ZIP de Windows"; exit 1; }
+          grep -q '"bin"' dist/scoop/bucket/mobatui.json \
+            || { echo "::error::Scoop sin bin"; exit 1; }
+          # WinGet: portable, alias y UpgradeBehavior.
+          W=$(ls dist/winget/manifests/*/*/*/*/*.installer.yaml)
+          grep -q 'NestedInstallerType: portable' "$W" || { echo "::error::winget no portable"; exit 1; }
+          grep -q 'PortableCommandAlias: mobatui' "$W" || { echo "::error::winget sin alias"; exit 1; }
+          grep -q 'UpgradeBehavior: uninstallPrevious' "$W" || { echo "::error::winget sin upgrade"; exit 1; }
+          echo "estructura correcta: 5 manifiestos coherentes"
 
       - uses: actions/upload-artifact@v4
         if: always()
