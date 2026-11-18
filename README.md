@@ -23,13 +23,13 @@ Desarrollada en Go con [Bubble Tea](https://github.com/charmbracelet/bubbletea) 
 ### Vista de build e ítems (Deadlock)
 > Tarjetas en truecolor por fase (`EARLY`, `MID`, `LATE`), evolución de componentes (`↑`), minuto estimado, costo en almas, orden de habilidades (`max 3 > 1 > 2 > 4`) y tendencia de win rate por parche.
 
-![Vista de build e ítems en Deadlock](docs/screenshots/deadlock-build.jpg)
+![Vista de build e ítems en Deadlock](docs/screenshots/deadlock-build.png)
 
 ### Selector de juego y lista de héroes
 
 | Menú principal y monitor activo | Lista filtrable ordenada por Wilson Score |
 | --- | --- |
-| ![Menú principal y monitor activo](docs/screenshots/game-select.png) | ![Lista filtrable ordenada por Wilson Score](docs/screenshots/hero-list.jpg) |
+| ![Menú principal y monitor activo](docs/screenshots/game-select.png) | ![Lista filtrable ordenada por Wilson Score](docs/screenshots/hero-list.png) |
 
 ---
 
