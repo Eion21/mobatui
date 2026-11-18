@@ -109,7 +109,16 @@ func IsNotFound(err error) bool {
 
 // getURL resuelve una URL con caché → HTTP → fixture.
 func (cl *Client) getURL(url string, ttl time.Duration) ([]byte, cache.State, error) {
-	res, err := cl.c.Get(url, ttl, func() ([]byte, error) {
+	return cl.getURLValidated(url, ttl, nil)
+}
+
+// getURLValidated es getURL con validador de cuerpo opcional.
+//
+// Solo los iconos pasan validador (ValidatePNG): un PNG truncado no debe
+// escribirse en la caché, porque su TTL es de 720 h y ningún reintento
+// podría recuperarlo mientras la entrada siga vigente.
+func (cl *Client) getURLValidated(url string, ttl time.Duration, validate func([]byte) error) ([]byte, cache.State, error) {
+	res, err := cl.c.GetValidated(url, ttl, func() ([]byte, error) {
 		resp, err := cl.http.Get(url)
 		if err != nil {
 			return nil, err
@@ -119,7 +128,7 @@ func (cl *Client) getURL(url string, ttl time.Duration) ([]byte, cache.State, er
 			return nil, &HTTPError{URL: url, StatusCode: resp.StatusCode}
 		}
 		return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	})
+	}, validate)
 	if err == nil {
 		return res.Body, res.State, nil
 	}
@@ -350,7 +359,7 @@ func (cl *Client) RuneIcon(id int) ([]byte, error) {
 		return nil, err
 	}
 	url := fmt.Sprintf("%s/cdn/img/%s", cl.baseURL, icon)
-	body, _, err := cl.getURL(url, ttlIcon)
+	body, _, err := cl.getURLValidated(url, ttlIcon, ValidatePNG)
 	return body, err
 }
 
@@ -419,7 +428,7 @@ func (cl *Client) ItemIcon(id int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, _, err := cl.getURL(url, ttlIcon)
+	body, _, err := cl.getURLValidated(url, ttlIcon, ValidatePNG)
 	return body, err
 }
 

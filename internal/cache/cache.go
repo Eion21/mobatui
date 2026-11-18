@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -178,6 +179,72 @@ func (c *Cache) HasEntry(key string) bool {
 	}
 	return true
 }
+
+// GetValidated es Get con validación del cuerpo ANTES de guardarlo.
+//
+// El validador es POR LLAMADA, no global: un Cache sin validador se
+// comporta exactamente como siempre. Así solo las entradas que declaran
+// un formato (hoy los iconos PNG) pagan el coste y quedan protegidas.
+//
+// Si validate rechaza el cuerpo, NO se escribe en disco y se devuelve un
+// error envolviendo ErrInvalidBody. Es importante que no se guarde: un
+// cuerpo corrupto con TTL largo (los iconos usan 720 h) envenenaría la
+// caché durante semanas, y ningún reintento podría recuperarla.
+//
+// Un cuerpo ya guardado por una versión anterior no se revalida aquí; el
+// validador solo protege las escrituras nuevas (ver el informe de la
+// auditoría para el tratamiento de entradas ya envenenadas).
+func (c *Cache) GetValidated(key string, ttl time.Duration, fetch func() ([]byte, error), validate func([]byte) error) (Result, error) {
+	if validate == nil {
+		return c.Get(key, ttl, fetch)
+	}
+	e, err := c.load(key)
+	if err == nil && c.timeNow().Before(e.ExpiresAt) {
+		if body, berr := c.loadBody(key); berr == nil {
+			c.report(StateHit, e.FetchedAt)
+			return Result{Body: body, State: StateHit, FetchedAt: e.FetchedAt}, nil
+		}
+	}
+	if c.Offline {
+		if e != nil {
+			if body, err := c.loadBody(key); err == nil {
+				c.report(StateStale, e.FetchedAt)
+				return Result{Body: body, State: StateStale, FetchedAt: e.FetchedAt}, nil
+			}
+		}
+		return Result{}, fmt.Errorf("cache: modo offline y sin entrada para %q", key)
+	}
+	body, err := fetch()
+	if err != nil {
+		if e != nil {
+			if stale, serr := c.loadBody(key); serr == nil {
+				c.report(StateStale, e.FetchedAt)
+				return Result{Body: stale, State: StateStale, FetchedAt: e.FetchedAt}, nil
+			}
+		}
+		return Result{}, fmt.Errorf("cache: fetch de %q fallido y sin caché: %w", key, err)
+	}
+	// Validar ANTES de store: un cuerpo inválido no debe llegar al disco.
+	if verr := validate(body); verr != nil {
+		return Result{}, fmt.Errorf("%w: %q: %v", ErrInvalidBody, key, verr)
+	}
+	now := c.timeNow()
+	if serr := c.store(key, &entry{
+		URL:       key,
+		FetchedAt: now,
+		ExpiresAt: now.Add(ttl),
+	}, body); serr != nil {
+		_ = serr
+	}
+	c.report(StateMiss, now)
+	return Result{Body: body, State: StateMiss, FetchedAt: now}, nil
+}
+
+// ErrInvalidBody marca el rechazo de un cuerpo por el validador de
+// GetValidated. Quien lo consume puede distinguirlo de un fallo de red:
+// es un fallo del CONTENIDO, no de la conexión, así que reintentarlo no
+// lo arregla por sí solo.
+var ErrInvalidBody = errors.New("cache: cuerpo inválido")
 
 // Get devuelve el cuerpo asociado a key. Con entrada fresca no llama a
 // fetch; sin entrada o caducada, hace fetch y persiste con ttl. Si el

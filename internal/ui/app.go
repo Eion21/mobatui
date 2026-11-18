@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image/color"
 	"image/png"
@@ -19,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 
+	"github.com/Eion21/mobatui/internal/cache"
 	"github.com/Eion21/mobatui/internal/clean"
 	"github.com/Eion21/mobatui/internal/config"
 	"github.com/Eion21/mobatui/internal/ddragon"
@@ -1712,6 +1714,13 @@ func classifyArtError(err error) artFailure {
 	}
 	if ddragon.IsNotFound(err) {
 		return artFailMissing
+	}
+	// El validador de la caché rechazó el cuerpo: es un fallo del
+	// CONTENIDO, no de la red. Se trata como corrupto (no memorizable):
+	// si el origen empieza a servir un PNG válido, un intento explícito
+	// posterior debe poder recuperarlo.
+	if errors.Is(err, cache.ErrInvalidBody) {
+		return artFailCorrupt
 	}
 	return artFailTransient
 }

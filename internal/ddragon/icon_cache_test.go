@@ -2,14 +2,18 @@ package ddragon
 
 import (
 	"bytes"
+	"compress/gzip"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Eion21/mobatui/internal/cache"
 )
@@ -95,19 +99,14 @@ func TestItemIconURLNoDependeDeTamanos(t *testing.T) {
 	}
 }
 
-// TestCacheConservaPNGTruncado documenta el comportamiento REAL de la
-// caché ante un cuerpo ilegible:
+// TestTruncadoNoEnvenenaLaCache es la prueba de regresión del defecto:
+// un PNG truncado servido con HTTP 200 NO debe quedar en la caché, y un
+// segundo intento explícito debe recuperar el icono cuando el origen ya
+// sirve uno válido.
 //
-//   - Se descarga UNA sola vez (no reintenta la red).
-//   - El cuerpo inválido queda guardado con TTL largo (ttlIcon).
-//   - Un segundo intento devuelve LOS MISMOS bytes: la caché no valida
-//     el contenido, así que no puede recuperarse solo por reintentar.
-//
-// La consecuencia para la UI está cubierta en internal/ui: artFailCorrupt
-// no se memoriza, de modo que un cambio de parche o de caché sí permite
-// volver a pedirlo, pero mientras la entrada siga vigente el icono no se
-// recupera. Es un límite de cache.Get, no de la UI.
-func TestCacheConservaPNGTruncado(t *testing.T) {
+// Sin la validación en escritura esto falla: la caché se queda con los
+// bytes truncados y el segundo intento devuelve los mismos bytes.
+func TestTruncadoNoEnvenenaLaCache(t *testing.T) {
 	truncado := []byte("\x89PNG\r\n\x1a\nbasura")
 	valido := pngValido(t)
 	var servirValido atomic.Bool
@@ -127,39 +126,152 @@ func TestCacheConservaPNGTruncado(t *testing.T) {
 	})
 	cl, _ := clienteDePrueba(t, mux)
 
-	raw1, err := cl.ItemIcon(4321)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, derr := png.Decode(bytes.NewReader(raw1)); derr == nil {
-		t.Fatal("el primer cuerpo debía ser ilegible")
+	// Primer intento: cuerpo truncado con 200.
+	if _, err := cl.ItemIcon(4321); err == nil {
+		t.Fatal("el primer intento debía rechazar el cuerpo truncado")
 	}
 
+	// El origen ya sirve un PNG válido.
 	servirValido.Store(true)
+
+	// Segundo intento explícito: DEBE recuperar el icono.
 	raw2, err := cl.ItemIcon(4321)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("el segundo intento debía recuperar el icono, no fallar: %v", err)
 	}
-	_, derr2 := png.Decode(bytes.NewReader(raw2))
-
-	// Hecho 1: no se vuelve a descargar (la caché sirve el hit).
-	if got := atomic.LoadInt32(&hits); got != 1 {
-		t.Errorf("descargas = %d, se esperaba 1 (la caché no revalida)", got)
+	if _, derr := png.Decode(bytes.NewReader(raw2)); derr != nil {
+		t.Fatalf("el segundo intento devolvió un cuerpo ilegible: %v", derr)
 	}
-	// Hecho 2: el cuerpo servido es el mismo, así que sigue ilegible.
-	if derr2 == nil {
-		t.Log("la caché sí devolvió el cuerpo nuevo: comportamiento distinto al esperado")
-	}
-	if len(raw2) != len(raw1) {
-		t.Errorf("la caché devolvió %d bytes, se esperaban los %d guardados",
-			len(raw2), len(raw1))
+	// Se descargó dos veces: la primera no se guardó, así que no hubo hit.
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Errorf("descargas = %d, se esperaban 2 (la primera no se cachea)", got)
 	}
 }
 
-// TestCostoDeUnRecursoCorrupto mide cuántas descargas y decodificaciones
-// cuesta un recurso corrupto ante N intentos. La UI no memoriza
-// artFailCorrupt, así que cada intento vuelve a decodificar; la red no se
-// repite porque la caché sirve el hit.
+// TestTruncadoNoSeEscribeEnDisco inspecciona el directorio de la caché:
+// tras un cuerpo inválido no debe quedar ninguna entrada para esa URL.
+func TestTruncadoNoSeEscribeEnDisco(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/versions.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`["16.21.1"]`))
+	})
+	mux.HandleFunc("/cdn/16.21.1/img/item/5555.png", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("\x89PNG\r\n\x1a\ntruncado"))
+	})
+
+	dir := t.TempDir()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, err := cache.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := New(c, t.TempDir(), "es_ES").WithHTTPClient(srv.Client())
+	cl.baseURL = srv.URL
+
+	if _, err := cl.ItemIcon(5555); err == nil {
+		t.Fatal("debía rechazar el cuerpo truncado")
+	}
+
+	// Ningún .body.gz debe corresponder al icono: se inspecciona el
+	// contenido de cada cuerpo guardado buscando la firma del truncado.
+	entradas, err := filepath.Glob(filepath.Join(dir, "*.json.body.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range entradas {
+		fh, err := os.Open(f)
+		if err != nil {
+			continue
+		}
+		zr, err := gzip.NewReader(fh)
+		if err != nil {
+			fh.Close()
+			continue
+		}
+		buf := make([]byte, 64)
+		n, _ := zr.Read(buf)
+		zr.Close()
+		fh.Close()
+		if bytes.Contains(buf[:n], []byte("truncado")) {
+			t.Errorf("el cuerpo truncado quedó escrito en %s", filepath.Base(f))
+		}
+	}
+}
+
+// TestCacheSinValidadorGuardaCualquierCuerpo fija la compatibilidad: el
+// Cache normal (Get) no valida nada, así que un cuerpo cualquiera se
+// guarda y se sirve. El validador es por entrada, no global.
+func TestCacheSinValidadorGuardaCualquierCuerpo(t *testing.T) {
+	dir := t.TempDir()
+	c, err := cache.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const clave = "https://ejemplo.invalido/cualquiera.bin"
+	cuerpo := []byte("esto no es un PNG ni nada parecido")
+	if _, err := c.Get(clave, time.Hour, func() ([]byte, error) { return cuerpo, nil }); err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.Get(clave, time.Hour, func() ([]byte, error) {
+		t.Fatal("no debía volver a pedir: hay entrada fresca")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(res.Body, cuerpo) {
+		t.Errorf("cuerpo servido = %q, se esperaba el guardado", res.Body)
+	}
+	if res.State != cache.StateHit {
+		t.Errorf("estado = %v, se esperaba StateHit", res.State)
+	}
+}
+
+// TestGetValidatedRechazaSinGuardar comprueba el contrato de
+// GetValidated: rechaza, no guarda y el error es ErrInvalidBody.
+func TestGetValidatedRechazaSinGuardar(t *testing.T) {
+	dir := t.TempDir()
+	c, err := cache.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const clave = "https://ejemplo.invalido/icono.png"
+	_, err = c.GetValidated(clave, time.Hour,
+		func() ([]byte, error) { return []byte("malo"), nil },
+		func(b []byte) error {
+			if string(b) != "bueno" {
+				return errors.New("no válido")
+			}
+			return nil
+		})
+	if err == nil {
+		t.Fatal("debía rechazar el cuerpo")
+	}
+	if !errors.Is(err, cache.ErrInvalidBody) {
+		t.Errorf("el error debe ser ErrInvalidBody, es: %v", err)
+	}
+	// Y no debe haber entrada: el siguiente Get tiene que pedir de nuevo.
+	pedido := false
+	res, err := c.Get(clave, time.Hour, func() ([]byte, error) {
+		pedido = true
+		return []byte("bueno"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pedido {
+		t.Error("no debía haber entrada guardada tras el rechazo")
+	}
+	if string(res.Body) != "bueno" {
+		t.Errorf("cuerpo = %q", res.Body)
+	}
+}
+
+// TestCostoDeUnRecursoCorrupto mide el EFECTO SECUNDARIO del validador:
+// con un origen que sirve SIEMPRE un cuerpo corrupto, ya no hay hit de
+// caché (la entrada no se guarda), así que cada intento vuelve a pedir a
+// la red. Se mide para dejarlo documentado; no hay backoff ni límite.
 func TestCostoDeUnRecursoCorrupto(t *testing.T) {
 	var peticiones int32
 	mux := http.NewServeMux()
@@ -175,21 +287,43 @@ func TestCostoDeUnRecursoCorrupto(t *testing.T) {
 	const N = 10
 	var fallos int
 	for i := 0; i < N; i++ {
-		raw, err := cl.ItemIcon(4321)
-		if err != nil {
-			t.Fatalf("intento %d: %v", i, err)
-		}
-		if _, derr := png.Decode(bytes.NewReader(raw)); derr != nil {
+		if _, err := cl.ItemIcon(4321); err != nil {
 			fallos++
 		}
 	}
-	if got := atomic.LoadInt32(&peticiones); got != 1 {
-		t.Errorf("peticiones HTTP = %d, se esperaba 1", got)
-	}
 	if fallos != N {
-		t.Errorf("decodificaciones fallidas = %d, se esperaban %d", fallos, N)
+		t.Errorf("fallos = %d, se esperaban %d", fallos, N)
 	}
-	t.Logf("N=%d intentos: red=%d, decodificaciones fallidas=%d "+
-		"(la red no se repite; el coste es de CPU)",
+	t.Logf("N=%d intentos con origen persistentemente corrupto: peticiones HTTP=%d, "+
+		"fallos=%d. Sin límite: cada intento reintenta la red porque no hay "+
+		"entrada en caché. No se implementa backoff (fuera de alcance).",
 		N, atomic.LoadInt32(&peticiones), fallos)
+}
+
+// TestValidadorDetectaTruncadoAMitad es la prueba que distingue un
+// validador correcto de uno basado en png.DecodeConfig.
+//
+// DecodeConfig solo lee la cabecera IHDR: se midió que un PNG real de
+// 64x64 truncado a la mitad devuelve err=nil (lo aceptaría). El caso de
+// 14 bytes sí lo detecta por casualidad, así que hace falta este.
+func TestValidadorDetectaTruncadoAMitad(t *testing.T) {
+	raw := pngValido(t)
+	if err := ValidatePNG(raw); err != nil {
+		t.Fatalf("un PNG completo debe validar: %v", err)
+	}
+	for _, n := range []int{14, len(raw) / 2, len(raw) - 1} {
+		if err := ValidatePNG(raw[:n]); err == nil {
+			t.Errorf("un PNG truncado a %d de %d bytes debe rechazarse", n, len(raw))
+		}
+	}
+	// Cuerpo corrupto con CRC que no cuadra.
+	corrupto := append([]byte(nil), raw...)
+	corrupto[len(corrupto)/2] ^= 0xFF
+	if err := ValidatePNG(corrupto); err == nil {
+		t.Error("un PNG con un byte alterado debe rechazarse")
+	}
+	// Sin firma.
+	if err := ValidatePNG([]byte("no soy un png")); err == nil {
+		t.Error("un cuerpo sin firma PNG debe rechazarse")
+	}
 }

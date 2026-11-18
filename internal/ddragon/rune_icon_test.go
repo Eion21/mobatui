@@ -183,9 +183,14 @@ func TestRuneIconImagenInexistente(t *testing.T) {
 	}
 }
 
-// TestRuneIconPNGCorrupto: el PNG existe pero no es válido. RuneIcon
-// devuelve los bytes; quien decodifica decide. No debe entrar en pánico.
-func TestRuneIconPNGCorrupto(t *testing.T) {
+// TestRuneIconPNGCorruptoSeRechaza: el PNG existe pero no es válido.
+//
+// CONTRATO CAMBIADO a propósito: antes RuneIcon devolvía los bytes y
+// "quien decodifica decide". Eso permitía que un cuerpo corrupto se
+// escribiera en la caché con TTL de 720 h y quedara envenenada durante
+// semanas (ningún reintento podía recuperarla). Ahora los iconos validan
+// ANTES de guardar y RuneIcon devuelve error.
+func TestRuneIconPNGCorruptoSeRechaza(t *testing.T) {
 	_, srv := newRuneServer(t)
 	defer srv.Close()
 	cl := newRuneClient(t, srv)
@@ -196,11 +201,11 @@ func TestRuneIconPNGCorrupto(t *testing.T) {
 	cl.runeIconsMu.Unlock()
 
 	body, err := cl.RuneIcon(1234)
-	if err != nil {
-		t.Fatalf("debe devolver los bytes, no fallar: %v", err)
+	if err == nil {
+		t.Fatalf("un PNG corrupto debe rechazarse, se devolvieron %d bytes", len(body))
 	}
-	if string(body) != "no soy un png" {
-		t.Errorf("bytes inesperados: %q", body)
+	if body != nil {
+		t.Errorf("no debe devolver cuerpo junto al error: %q", body)
 	}
 }
 
