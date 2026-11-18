@@ -19,7 +19,12 @@ jobs:
           go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # Versión FIJA, no 'latest': una actualización de GoReleaser puede
+          # deprecar claves del config y romper la release sin que nadie
+          # toque el repositorio. v2.19.0 es la versión con la que se
+          # validaron 'goreleaser check' y un snapshot completo antes de
+          # v0.2.1. Al subir de versión, ejecutar 'goreleaser check' antes.
+          version: v2.19.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
