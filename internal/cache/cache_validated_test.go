@@ -76,6 +76,9 @@ func TestOfflineCorruptoNoSeSirve(t *testing.T) {
 	}
 
 	c.Offline = true
+	// Fuera de la ventana de frescura para forzar la rama offline.
+	base := c.timeNow()
+	c.now = func() time.Time { return base.Add(2 * time.Hour) }
 	res, err := c.GetValidated(clave, time.Hour,
 		func() ([]byte, error) { t.Fatal("offline no debe hacer fetch"); return nil, nil },
 		func(b []byte) error { return errors.New("inválido") })

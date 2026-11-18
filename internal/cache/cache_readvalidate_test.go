@@ -150,6 +150,13 @@ func TestOfflineEnvenenadaNoSirveBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Offline = true
+	// Se adelanta el reloj para que la entrada NO sea fresca: así la
+	// lectura cae forzosamente en la rama offline, no en la del hit.
+	if c.now == nil {
+		c.now = time.Now
+	}
+	base := c.now()
+	c.now = func() time.Time { return base.Add(2 * time.Hour) }
 
 	res, err := c.GetValidated(clave, time.Hour,
 		func() ([]byte, error) { t.Fatal("offline no debe hacer fetch"); return nil, nil },
