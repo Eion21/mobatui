@@ -22,6 +22,15 @@ import (
 // Vacía en compilaciones normales (go build / go install).
 var injected string
 
+// injectedCommit la rellena GoReleaser con el SHA completo del commit:
+//
+//	-X github.com/Eion21/mobatui/internal/version.injectedCommit={{ .FullCommit }}
+//
+// Sin ella, el commit solo puede venir de debug.BuildInfo (vcs.revision),
+// que NO existe en un build de GoReleaser: el binario publicado anunciaba
+// "commit: (desconocido)". Se mantiene como fallback.
+var injectedCommit string
+
 // devVersion es lo que se muestra cuando no hay ni inyección ni
 // metadatos del módulo: un binario compilado a mano desde el repo.
 const devVersion = "(devel)"
@@ -80,12 +89,21 @@ func readBuildInfo() buildInfo {
 // resolve aplica la prioridad. Es una función pura para poder probar los
 // tres orígenes sin recompilar.
 func resolve(ldflags string, read func() buildInfo) Info {
-	if v := normalizeTag(strings.TrimSpace(ldflags)); v != "" {
-		return Info{Version: v, Source: SourceInjected}
-	}
-
 	bi := read()
-	commit := shortCommit(bi.commit)
+
+	// El commit inyectado por ldflags tiene prioridad sobre vcs.revision:
+	// en un build de GoReleaser NO hay vcs.revision, así que sin esto el
+	// binario publicado perdía el commit. Se resuelve ANTES del return
+	// anticipado de la versión inyectada, que era donde se descartaba.
+	commitSrc := bi.commit
+	if c := strings.TrimSpace(injectedCommit); c != "" {
+		commitSrc = c
+	}
+	commit := shortCommit(commitSrc)
+
+	if v := normalizeTag(strings.TrimSpace(ldflags)); v != "" {
+		return Info{Version: v, Commit: commit, Source: SourceInjected}
+	}
 
 	// Go deja "(devel)" o "v0.2.0-0.2025...-dirty" en builds locales; un
 	// módulo publicado trae "v1.2.3". Solo sirve el segundo.

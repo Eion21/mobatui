@@ -17,6 +17,10 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/Eion21/mobatui/internal/version.injected={{ .Version }}
+      # SHA completo del commit: sin esto el binario publicado anunciaba
+      # "commit: (desconocido)", porque GoReleaser no compila con
+      # vcs.revision.
+      - -X github.com/Eion21/mobatui/internal/version.injectedCommit={{ .FullCommit }}
     goos:
       - linux
       - darwin
