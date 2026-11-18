@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,9 +22,10 @@ type reloj struct{ t time.Time }
 
 func (r *reloj) now() time.Time { return r.t }
 
-// TestStaleNoPasaPorElValidador demuestra que el respaldo stale se
-// sirve sin validar.
-func TestStaleNoPasaPorElValidador(t *testing.T) {
+// TestStaleCorruptoNoSeSirve: el respaldo stale pasa por el validador.
+// Un cuerpo vencido que no lo supera no es respaldo de nada: se descarta
+// y la operación falla.
+func TestStaleCorruptoNoSeSirve(t *testing.T) {
 	dir := t.TempDir()
 	c, err := New(dir)
 	if err != nil {
@@ -35,46 +37,33 @@ func TestStaleNoPasaPorElValidador(t *testing.T) {
 	const clave = "https://cdn.invalido/icono.png"
 	corrupto := []byte("cuerpo corrupto viejo")
 
-	// 1. Se guarda un cuerpo corrupto SIN validador (como haría una
-	//    versión anterior, o un Get normal).
 	if _, err := c.Get(clave, time.Hour, func() ([]byte, error) { return corrupto, nil }); err != nil {
 		t.Fatal(err)
 	}
+	clk.t = clk.t.Add(2 * time.Hour) // caduca
 
-	// 2. Se adelanta el reloj para que caduque.
-	clk.t = clk.t.Add(2 * time.Hour)
-
-	// 3. El fetch falla: debe servirse la entrada caducada.
-	validadorLlamado := 0
 	res, err := c.GetValidated(clave, time.Hour,
 		func() ([]byte, error) { return nil, errors.New("red caída") },
 		func(b []byte) error {
-			validadorLlamado++
 			if bytes.Contains(b, []byte("corrupto")) {
 				return errors.New("no es un PNG")
 			}
 			return nil
 		})
-	if err != nil {
-		t.Fatalf("debía servir la entrada caducada: %v", err)
+	if err == nil {
+		t.Fatalf("no debe servirse un respaldo inválido; sirvió %q", res.Body)
 	}
-	if res.State != StateStale {
-		t.Errorf("estado = %v, se esperaba StateStale", res.State)
+	if !errors.Is(err, ErrInvalidBody) {
+		t.Errorf("error = %v, se esperaba ErrInvalidBody", err)
 	}
-	if !bytes.Equal(res.Body, corrupto) {
-		t.Errorf("cuerpo servido = %q", res.Body)
+	if bytes.Contains(res.Body, []byte("corrupto")) {
+		t.Errorf("sirvió el cuerpo corrupto: %q", res.Body)
 	}
-	// HALLAZGO: el validador NO se aplica al respaldo stale.
-	if validadorLlamado != 0 {
-		t.Errorf("el validador se llamó %d veces en el camino stale; se esperaba 0", validadorLlamado)
-	}
-	t.Logf("CONFIRMADO: el respaldo stale se sirve SIN validar "+
-		"(cuerpo=%q, estado=%v, validador=%d llamadas)", res.Body, res.State, validadorLlamado)
 }
 
-// TestOfflineSirveCorrupto: en modo offline también se sirve la entrada
-// sin validar.
-func TestOfflineSirveCorrupto(t *testing.T) {
+// TestOfflineCorruptoNoSeSirve: en offline tampoco se sirve un cuerpo
+// inválido, pero la entrada se CONSERVA (sin red no se puede reponer).
+func TestOfflineCorruptoNoSeSirve(t *testing.T) {
 	dir := t.TempDir()
 	c, err := New(dir)
 	if err != nil {
@@ -87,20 +76,22 @@ func TestOfflineSirveCorrupto(t *testing.T) {
 	}
 
 	c.Offline = true
-	llamado := 0
 	res, err := c.GetValidated(clave, time.Hour,
 		func() ([]byte, error) { t.Fatal("offline no debe hacer fetch"); return nil, nil },
-		func(b []byte) error { llamado++; return errors.New("inválido") })
-	if err != nil {
-		t.Fatalf("offline debía servir la entrada: %v", err)
+		func(b []byte) error { return errors.New("inválido") })
+	if err == nil {
+		t.Fatalf("offline debe rechazar el cuerpo inválido; sirvió %q", res.Body)
 	}
-	if llamado != 0 {
-		t.Errorf("el validador se llamó %d veces en offline", llamado)
+	if !errors.Is(err, ErrInvalidBody) {
+		t.Errorf("error = %v, se esperaba ErrInvalidBody", err)
 	}
-	if !bytes.Equal(res.Body, corrupto) {
-		t.Errorf("cuerpo = %q", res.Body)
+	if bytes.Contains(res.Body, []byte("basura")) {
+		t.Errorf("sirvió el cuerpo: %q", res.Body)
 	}
-	t.Logf("CONFIRMADO: en offline se sirve el cuerpo sin validar (%q)", res.Body)
+	// La entrada sigue en disco: se recuperará al reconectar.
+	if _, statErr := os.Stat(c.path(clave)); statErr != nil {
+		t.Errorf("la entrada debía conservarse en offline: %v", statErr)
+	}
 }
 
 // TestValidadorSoloProtegeEscriturasNuevas: un cuerpo inválido recién

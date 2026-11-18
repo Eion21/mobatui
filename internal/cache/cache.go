@@ -180,51 +180,84 @@ func (c *Cache) HasEntry(key string) bool {
 	return true
 }
 
-// GetValidated es Get con validación del cuerpo ANTES de guardarlo.
+// GetValidated es Get con validación del cuerpo.
 //
 // El validador es POR LLAMADA, no global: un Cache sin validador se
 // comporta exactamente como siempre. Así solo las entradas que declaran
 // un formato (hoy los iconos PNG) pagan el coste y quedan protegidas.
 //
-// Si validate rechaza el cuerpo, NO se escribe en disco y se devuelve un
-// error envolviendo ErrInvalidBody. Es importante que no se guarde: un
-// cuerpo corrupto con TTL largo (los iconos usan 720 h) envenenaría la
-// caché durante semanas, y ningún reintento podría recuperarla.
+// Valida en TODOS los caminos que devuelven un cuerpo, no solo al
+// escribir:
 //
-// Un cuerpo ya guardado por una versión anterior no se revalida aquí; el
-// validador solo protege las escrituras nuevas (ver el informe de la
-// auditoría para el tratamiento de entradas ya envenenadas).
+//  1. hit fresco      (antes servía sin mirar el contenido)
+//  2. respaldo stale  (antes servía sin mirar el contenido)
+//  3. modo offline    (antes servía sin mirar el contenido)
+//  4. cuerpo recién descargado, ANTES de store
+//
+// Si un cuerpo cacheado no supera el validador, la entrada se DESCARTA
+// del disco y se intenta recargar. Si la recarga tampoco da un cuerpo
+// válido, se devuelve error: NUNCA se sirve un cuerpo inválido.
+//
+// En modo offline no se descarta la entrada: sin red no se podría
+// reponer y se perdería para siempre. Se devuelve error y la entrada
+// queda para cuando vuelva la conexión.
 func (c *Cache) GetValidated(key string, ttl time.Duration, fetch func() ([]byte, error), validate func([]byte) error) (Result, error) {
 	if validate == nil {
 		return c.Get(key, ttl, fetch)
 	}
 	e, err := c.load(key)
+
+	// 1. Hit fresco: validar antes de servirlo.
 	if err == nil && c.timeNow().Before(e.ExpiresAt) {
 		if body, berr := c.loadBody(key); berr == nil {
-			c.report(StateHit, e.FetchedAt)
-			return Result{Body: body, State: StateHit, FetchedAt: e.FetchedAt}, nil
+			if verr := validate(body); verr == nil {
+				c.report(StateHit, e.FetchedAt)
+				return Result{Body: body, State: StateHit, FetchedAt: e.FetchedAt}, nil
+			}
+			// Entrada envenenada. En offline NO se descarta (sin red
+			// no se podría reponer): se devuelve error conservándola.
+			if c.Offline {
+				return Result{}, fmt.Errorf("%w: %q (offline, entrada conservada)", ErrInvalidBody, key)
+			}
+			c.discard(key)
+			e = nil
 		}
 	}
+
+	// 3. Modo offline: no hay red para reponer, así que un cuerpo
+	// inválido produce error pero NO se borra la entrada.
 	if c.Offline {
 		if e != nil {
-			if body, err := c.loadBody(key); err == nil {
-				c.report(StateStale, e.FetchedAt)
-				return Result{Body: body, State: StateStale, FetchedAt: e.FetchedAt}, nil
+			if body, berr := c.loadBody(key); berr == nil {
+				if verr := validate(body); verr == nil {
+					c.report(StateStale, e.FetchedAt)
+					return Result{Body: body, State: StateStale, FetchedAt: e.FetchedAt}, nil
+				}
+				return Result{}, fmt.Errorf("%w: %q (offline, entrada conservada)", ErrInvalidBody, key)
 			}
 		}
 		return Result{}, fmt.Errorf("cache: modo offline y sin entrada para %q", key)
 	}
-	body, err := fetch()
-	if err != nil {
+
+	body, ferr := fetch()
+	if ferr != nil {
+		// 2. Respaldo stale: validar también. Un cuerpo vencido e
+		// inválido no es respaldo de nada.
 		if e != nil {
 			if stale, serr := c.loadBody(key); serr == nil {
-				c.report(StateStale, e.FetchedAt)
-				return Result{Body: stale, State: StateStale, FetchedAt: e.FetchedAt}, nil
+				if verr := validate(stale); verr == nil {
+					c.report(StateStale, e.FetchedAt)
+					return Result{Body: stale, State: StateStale, FetchedAt: e.FetchedAt}, nil
+				}
+				c.discard(key)
+				return Result{}, fmt.Errorf("%w: %q (respaldo caducado descartado): %w",
+					ErrInvalidBody, key, ferr)
 			}
 		}
-		return Result{}, fmt.Errorf("cache: fetch de %q fallido y sin caché: %w", key, err)
+		return Result{}, fmt.Errorf("cache: fetch de %q fallido y sin caché: %w", key, ferr)
 	}
-	// Validar ANTES de store: un cuerpo inválido no debe llegar al disco.
+
+	// 4. Cuerpo recién descargado: validar ANTES de store.
 	if verr := validate(body); verr != nil {
 		return Result{}, fmt.Errorf("%w: %q: %v", ErrInvalidBody, key, verr)
 	}
@@ -238,6 +271,18 @@ func (c *Cache) GetValidated(key string, ttl time.Duration, fetch func() ([]byte
 	}
 	c.report(StateMiss, now)
 	return Result{Body: body, State: StateMiss, FetchedAt: now}, nil
+}
+
+// discard elimina del disco una entrada cuyo cuerpo no superó el
+// validador, para que la siguiente lectura no vuelva a tropezar con
+// ella. Los errores de borrado se ignoran: si no se puede borrar, la
+// validación en lectura la rechazará otra vez.
+//
+// Es seguro ante concurrencia: no hay estado en memoria que corromper,
+// solo dos os.Remove que son idempotentes entre sí.
+func (c *Cache) discard(key string) {
+	_ = os.Remove(c.path(key))
+	_ = os.Remove(c.bodyPath(key))
 }
 
 // ErrInvalidBody marca el rechazo de un cuerpo por el validador de
