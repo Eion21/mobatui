@@ -1,8 +1,12 @@
 package ui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"testing"
 
 	"github.com/Eion21/mobatui/internal/ddragon"
@@ -71,10 +75,24 @@ func TestFallosDefinitivosSeMemorizan(t *testing.T) {
 		t.Error("un 404 debe memorizarse")
 	}
 
+	// Un PNG ilegible NO se memoriza: la caché de Data Dragon guarda el
+	// cuerpo con HTTP 200 y TTL largo, así que un truncamiento no se
+	// distingue de una corrupción permanente. Bloquearlo dejaría el
+	// icono muerto para siempre; se deja reintentable.
 	k2 := artKey{Kind: artItem, ID: 2, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}
 	s.markArtFailed(k2, artFailCorrupt)
-	if !s.artDidFail(k2) {
-		t.Error("un PNG corrupto debe memorizarse")
+	if s.artDidFail(k2) {
+		t.Error("un PNG ilegible no debe bloquearse de forma permanente")
+	}
+	// Se comprueba el mapa CRUDO: artDidFail filtra por su cuenta, así
+	// que memorizar el corrupto por error no cambiaría el
+	// comportamiento pero sí haría crecer el mapa sin límite y, sobre
+	// todo, ocultaría que la clasificación dejó de respetarse.
+	s.runeArtMu.RLock()
+	_, existeCorrupto := s.artFailed[s.resourceForLocked(k2)]
+	s.runeArtMu.RUnlock()
+	if existeCorrupto {
+		t.Error("un PNG ilegible no debe ocupar el mapa de fallos definitivos")
 	}
 }
 
@@ -138,20 +156,59 @@ func TestInvalidacionOlvidaFallos(t *testing.T) {
 	}
 }
 
-// TestFallosSeparadosPorParcheYTamano: la clave incluye ambos, así que
-// un 404 en un parche no contamina otro.
-func TestFallosSeparadosPorParcheYTamano(t *testing.T) {
+// TestFallosCompartidosEntreTamanos: el recurso descargado NO depende
+// de las columnas (ver artResource), así que un 404 a 3 columnas tiene
+// que servir también para 4 y 6. Si no, cambiar de ancho redescarga el
+// mismo 404.
+//
+// Antes existía TestFallosSeparadosPorParcheYTamano exigiendo aislar el
+// 404 por tamaño. Era incorrecto: la URL es la misma para todos los
+// anchos.
+func TestFallosCompartidosEntreTamanos(t *testing.T) {
 	s := &Session{Game: model.GameLoL, ItemArt: map[artKey]string{},
-		ChampionArt: map[string]champArt{}}
+		ChampionArt: map[string]champArt{}, Version: "16.21"}
 	a := artKey{Kind: artItem, ID: 5, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}
-	b := artKey{Kind: artItem, ID: 5, Cols: 3, Mode: artHalfBlock, Patch: "16.22"}
+	b := artKey{Kind: artItem, ID: 5, Cols: 4, Mode: artHalfBlock, Patch: "16.21"}
 	c := artKey{Kind: artItem, ID: 5, Cols: 6, Mode: artHalfBlock, Patch: "16.21"}
 	s.markArtFailed(a, artFailMissing)
-	if s.artDidFail(b) {
-		t.Error("otro parche no debe heredar el fallo")
+
+	if !s.artDidFail(a) {
+		t.Fatal("el 404 debe constar para el ancho que lo descubrió")
 	}
-	if s.artDidFail(c) {
-		t.Error("otro tamaño no debe heredar el fallo")
+	if !s.artDidFail(b) || !s.artDidFail(c) {
+		t.Error("un 404 debe compartirse entre 3, 4 y 6 columnas: es el mismo PNG")
+	}
+	// El modo tampoco cambia el recurso.
+	if !s.artDidFail(artKey{Kind: artItem, ID: 5, Cols: 3,
+		Mode: artPlain, Patch: "16.21"}) {
+		t.Error("el modo de render no cambia el recurso descargado")
+	}
+}
+
+// TestFallosSeparadosPorParcheYProveedor: lo que SÍ cambia el recurso
+// (parche, proveedor, id) debe permitir una nueva solicitud.
+func TestFallosSeparadosPorParcheYProveedor(t *testing.T) {
+	s := &Session{Game: model.GameLoL, ItemArt: map[artKey]string{},
+		ChampionArt: map[string]champArt{}, Version: "16.21"}
+	a := artKey{Kind: artItem, ID: 5, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}
+	s.markArtFailed(a, artFailMissing)
+	if !s.artDidFail(a) {
+		t.Fatal("debía constar")
+	}
+
+	// Otro parche: otro recurso, otra solicitud permitida.
+	otroParche := artKey{Kind: artItem, ID: 5, Cols: 3, Mode: artHalfBlock, Patch: "16.22"}
+	if s.artDidFail(otroParche) {
+		t.Error("otro parche no debe heredar el 404")
+	}
+	// Otro id: otro recurso.
+	if s.artDidFail(artKey{Kind: artItem, ID: 6, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}) {
+		t.Error("otro id no debe heredar el 404")
+	}
+	// Otro proveedor: otro recurso (misma id/parche).
+	s.Provider = &errorProvider{err: errors.New("x")}
+	if s.artDidFail(a) {
+		t.Error("un cambio de proveedor debe permitir volver a pedir")
 	}
 }
 
@@ -443,7 +500,7 @@ func TestFallosRealesRespetanLaClasificacion(t *testing.T) {
 			// memorizado por error no cambiaría el comportamiento pero
 			// sí haría crecer el mapa sin límite en una sesión larga.
 			s.runeArtMu.RLock()
-			guardado, existe := s.artFailed[k]
+			guardado, existe := s.artFailed[s.resourceForLocked(k)]
 			s.runeArtMu.RUnlock()
 			if c.memoriza {
 				if !existe {
@@ -471,27 +528,131 @@ func (c *corruptProvider) ItemIcon(int) ([]byte, error) {
 	return []byte("no soy un png"), nil
 }
 
-// TestPNGCorruptoSeMemorizaSinRomper: un cuerpo inválido se marca como
-// corrupto (definitivo) y la UI cae al nombre, sin pánico.
-func TestPNGCorruptoSeMemorizaSinRomper(t *testing.T) {
+// TestPNGCorruptoNoRompeYEsRecuperable: un cuerpo inválido no pinta
+// nada (la UI cae al nombre, sin pánico) y NO se bloquea para siempre:
+// si el mismo recurso vuelve válido, un intento explícito lo recupera.
+func TestPNGCorruptoNoRompeYEsRecuperable(t *testing.T) {
 	s := &Session{
 		Game:        model.GameLoL,
 		ItemArt:     map[artKey]string{},
 		ChampionArt: map[string]champArt{},
 		Version:     "16.21",
 	}
-	s.Provider = &corruptProvider{}
-	cmd := itemArtCmdFor(s, []int{4321}, smallArtCols)
-	if cmd == nil {
-		t.Fatal("debía intentar")
+	// Primero sirve bytes truncados; luego un PNG válido.
+	p := &secuenciaProvider{respuestas: [][]byte{[]byte("\x89PNG truncado")}}
+	s.Provider = p
+
+	if cmd := itemArtCmdFor(s, []int{4321}, smallArtCols); cmd != nil {
+		_ = cmd()
 	}
-	_ = cmd()
+	if got := s.ItemArtFor(4321, smallArtCols); got != "" {
+		t.Errorf("no debe quedar arte de un PNG inválido: %q", got)
+	}
 	k := artKey{Kind: artItem, ID: 4321, Cols: smallArtCols,
 		Mode: artHalfBlock, Patch: "16.21"}
-	if !s.artDidFail(k) {
-		t.Error("un PNG corrupto debe memorizarse para no reintentarse")
+	if s.artDidFail(k) {
+		t.Fatal("un PNG ilegible no debe bloquearse permanentemente")
 	}
-	if s.ItemArtFor(4321, smallArtCols) != "" {
-		t.Error("no debe quedar arte de un PNG inválido")
+
+	// Segundo intento explícito con bytes válidos: debe recuperarse.
+	// El Cmd devuelve el arte; publicarlo es responsabilidad del bucle
+	// (putArt), igual que hace artLoadedMsg en producción.
+	p.respuestas = [][]byte{pngValido(t)}
+	cmd := itemArtCmdFor(s, []int{4321}, smallArtCols)
+	if cmd == nil {
+		t.Fatal("debía reintentar: el fallo es recuperable")
 	}
+	msg, ok := cmd().(artLoadedMsg)
+	if !ok {
+		t.Fatal("mensaje inesperado")
+	}
+	if len(msg.Art) == 0 {
+		t.Fatal("el segundo intento no produjo arte")
+	}
+	for k, a := range msg.Art {
+		s.putArt(k, a)
+	}
+	if s.ItemArtFor(4321, smallArtCols) == "" {
+		t.Error("un intento explícito posterior debe recuperar el icono válido")
+	}
+}
+
+// pngValido genera un PNG real de 64x64 para las pruebas.
+func pngValido(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			img.Set(x, y, color.RGBA{200, 40, 40, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// secuenciaProvider devuelve respuestas en orden y repite la última.
+type secuenciaProvider struct {
+	staticdata.Provider
+	respuestas [][]byte
+	i          int
+}
+
+func (p *secuenciaProvider) ItemIcon(int) ([]byte, error) {
+	if len(p.respuestas) == 0 {
+		return nil, errors.New("sin respuestas")
+	}
+	if p.i >= len(p.respuestas) {
+		p.i = len(p.respuestas) - 1
+	}
+	r := p.respuestas[p.i]
+	if p.i < len(p.respuestas)-1 {
+		p.i++
+	}
+	return r, nil
+}
+
+// Test404NoSeRedescargaAlCambiarDeAncho es la prueba de impacto del
+// defecto encontrado: antes, un 404 a 3 columnas volvía a descargarse al
+// pasar a 4 o 6 (2 descargas del mismo recurso). El recurso no depende
+// del ancho, así que debe ser UNA sola descarga.
+func Test404NoSeRedescargaAlCambiarDeAncho(t *testing.T) {
+	s := &Session{
+		Game: model.GameLoL, ItemArt: map[artKey]string{},
+		ChampionArt: map[string]champArt{}, Version: "16.21",
+	}
+	p := &contadorProvider{err: &ddragon.HTTPError{URL: "u", StatusCode: 404}}
+	s.Provider = p
+
+	// Recorrido completo de la escala: 3 -> 4 -> 6 columnas.
+	for _, cols := range []int{smallArtCols, artColsMedium, artColsLarge} {
+		if cmd := itemArtCmdFor(s, []int{9999}, cols); cmd != nil {
+			_ = cmd()
+		}
+	}
+	if p.n != 1 {
+		t.Errorf("el mismo 404 se descargó %d veces; debe ser 1 (el recurso no depende del ancho)", p.n)
+	}
+
+	// Y sigue sin pedirse al volver a un ancho ya probado.
+	if cmd := itemArtCmdFor(s, []int{9999}, smallArtCols); cmd != nil {
+		t.Error("volver a 3 columnas no debe relanzar la descarga de un 404 conocido")
+	}
+	if p.n != 1 {
+		t.Errorf("descargas = %d, se esperaba 1", p.n)
+	}
+}
+
+// contadorProvider cuenta ItemIcon y devuelve siempre el mismo error.
+type contadorProvider struct {
+	staticdata.Provider
+	err error
+	n   int
+}
+
+func (c *contadorProvider) ItemIcon(int) ([]byte, error) {
+	c.n++
+	return nil, c.err
 }

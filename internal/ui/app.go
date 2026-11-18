@@ -144,7 +144,7 @@ type Session struct {
 	//
 	// Sin este registro, tabArtReady nunca daría por completa la
 	// pestaña y cada evento de resize relanzaría la misma descarga.
-	artFailed map[artKey]artFailure
+	artFailed map[artResource]artFailure
 	// Routes guarda la ruta de compra por héroe (Deadlock, carga bajo
 	// demanda al abrir el detalle): orden de consenso, cadena y tasas.
 	// nil = en curso; vacía = sin datos (muestra insuficiente o error).
@@ -344,7 +344,7 @@ func (s *Session) InvalidateArt() {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
 	s.ItemArt = map[artKey]string{}
-	s.artFailed = map[artKey]artFailure{}
+	s.artFailed = map[artResource]artFailure{}
 }
 
 // ItemName resuelve el nombre real de un ítem con fallback.
@@ -1620,30 +1620,62 @@ func humanAge(d time.Duration) string {
 }
 
 // ─── estado de los iconos de Ruta/Alt. ─────────────────────────────
+//
+// IDENTIDAD DEL RECURSO: lo que se descarga es
+//
+//	{base}/cdn/{parche}/img/item/{id}.png
+//
+// (ver ddragon.ItemIcon). Esa URL NO depende de las columnas ni del modo
+// de render: 3, 4 y 6 columnas piden EXACTAMENTE el mismo PNG y lo único
+// que cambia es cómo se representa después. Por tanto:
+//
+//   - La caché de arte RENDERIZADO (ItemArt) sí distingue columnas y
+//     modo: cada combinación produce un string distinto.
+//   - La caché de FALLOS NO puede distinguirlos: si el recurso no existe
+//     (404/410), no existe para ningún ancho. Indexarla por artKey hacía
+//     que cambiar de 3 a 6 columnas redescargara el mismo 404.
+//
+// Por eso los fallos se indexan por artResource: proveedor + id + parche.
 
-// artFailure explica por qué una clave no produjo arte.
+// artResource identifica el RECURSO descargado, sin nada de la
+// representación. Dos claves de arte con el mismo artResource comparten
+// bytes: si uno falla, el otro también.
+type artResource struct {
+	// Provider distingue la fuente (Data Dragon para LoL, la API para
+	// Deadlock). Un cambio de proveedor debe permitir pedir de nuevo.
+	Provider string
+	ID       int
+	Patch    string
+}
+
+// artFailure explica por qué un recurso no produjo arte.
 //
 // La distinción es funcional, no cosmética:
 //
-//   - Un recurso AUSENTE (404/410) o un PNG CORRUPTO no van a mejorar
-//     reintentándolos: se memorizan para no repetir la descarga.
-//   - Un fallo TRANSITORIO (red caída, timeout, 5xx) sí puede resolverse
-//     solo: NO se memoriza, y el próximo intento lo vuelve a probar.
+//   - Un recurso AUSENTE (404/410) no va a aparecer reintentándolo: se
+//     memoriza para no repetir la descarga.
+//   - Un fallo TRANSITORIO (red, timeout, 5xx, 429) puede resolverse
+//     solo: NO se memoriza.
+//   - Un PNG ILEGIBLE tampoco se memoriza. La caché de Data Dragon
+//     guarda el cuerpo con HTTP 200 y TTL largo, así que un truncamiento
+//     no se distingue de una corrupción permanente desde aquí. Bloquearlo
+//     dejaría el icono muerto para siempre; se deja reintentable para que
+//     un intento explícito posterior (cambio de pestaña, de campeón o de
+//     tramo de ancho) pueda recuperarlo si los bytes ya son válidos.
 //
-// Los reintentos nunca son infinitos ni ocurren en View(): solo se
-// reintenta cuando el usuario provoca un evento que relanza la precarga
-// (cambiar de pestaña, de campeón o de tramo de ancho).
+// No hay temporizadores ni reintentos autónomos: solo se reintenta
+// cuando un evento de usuario relanza la precarga.
 type artFailure uint8
 
 const (
 	// artFailNone: no hay fallo registrado.
 	artFailNone artFailure = iota
-	// artFailMissing: el CDN responde 404/410 para ese id y parche.
+	// artFailMissing: el CDN responde 404/410 para ese recurso.
 	artFailMissing
-	// artFailCorrupt: llegó un cuerpo que no se pudo decodificar como PNG.
+	// artFailCorrupt: el cuerpo no se pudo decodificar como PNG. NO se
+	// memoriza (ver el comentario de arriba).
 	artFailCorrupt
-	// artFailTransient: red, timeout, 5xx o proveedor sin datos. Se
-	// puede recuperar, así que no se memoriza.
+	// artFailTransient: red, timeout, 5xx o proveedor sin datos.
 	artFailTransient
 )
 
@@ -1662,24 +1694,38 @@ func classifyArtError(err error) artFailure {
 	return artFailTransient
 }
 
-// artDidFail indica si esa clave tiene un fallo DEFINITIVO registrado.
+// artDidFail indica si el RECURSO de esa clave tiene un fallo
+// DEFINITIVO registrado. Compartido entre tamaños y modos.
 func (s *Session) artDidFail(key artKey) bool {
 	s.runeArtMu.RLock()
 	defer s.runeArtMu.RUnlock()
-	f := s.artFailed[key]
-	return f == artFailMissing || f == artFailCorrupt
+	return s.artFailed[s.resourceForLocked(key)] == artFailMissing
 }
 
-// markArtFailed registra un fallo definitivo; los transitorios se
-// ignoran a propósito para no bloquear la recuperación.
+// resourceForLocked deriva el recurso de una clave de arte. Quien llama
+// ya tiene el candado.
+//
+// Se usa el tipo concreto del proveedor como identidad: la interfaz
+// staticdata.Provider no expone una, y el tipo distingue Data Dragon de
+// Deadlock, que es lo que importa para no mezclar fuentes.
+func (s *Session) resourceForLocked(key artKey) artResource {
+	prov := "none"
+	if s.Provider != nil {
+		prov = fmt.Sprintf("%T", s.Provider)
+	}
+	return artResource{Provider: prov, ID: key.ID, Patch: key.Patch}
+}
+
+// markArtFailed registra un fallo DEFINITIVO para el recurso.
+// Los transitorios y los PNG ilegibles se ignoran a propósito.
 func (s *Session) markArtFailed(key artKey, kind artFailure) {
-	if kind != artFailMissing && kind != artFailCorrupt {
+	if kind != artFailMissing {
 		return
 	}
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
 	if s.artFailed == nil {
-		s.artFailed = map[artKey]artFailure{}
+		s.artFailed = map[artResource]artFailure{}
 	}
-	s.artFailed[key] = kind
+	s.artFailed[s.resourceForLocked(key)] = kind
 }

@@ -635,6 +635,13 @@ func itemArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
 		if s.hasArt(key) {
 			continue
 		}
+		// Un recurso con 404/410 ya conocido no se vuelve a pedir, sea
+		// cual sea el ancho: la URL no depende de las columnas. Sin esta
+		// comprobación, cambiar de 3 a 6 columnas redescargaba el mismo
+		// 404 (era el defecto: 3 descargas para un solo recurso).
+		if s.artDidFail(key) {
+			continue
+		}
 		if !s.reserveArt(key) {
 			continue
 		}
