@@ -10,8 +10,10 @@ on:
   pull_request:
     paths:
       - ".goreleaser.yaml"
+      - ".goreleaser-publish.yaml"
       - "cmd/pkgcheck/**"
       - ".github/workflows/packages.yml"
+      - ".github/workflows/publish-packages.yml"
   workflow_dispatch:
 
 permissions:
@@ -32,6 +34,11 @@ jobs:
 
       # 'goreleaser check' valida el esquema del config. Es lo que detectó
       # 'archives.builds' deprecado en v0.2.1.
+      # Tests de la etiqueta 'packages': tag checkout, formato de tag y
+      # verificación del propio YAML. Sin red.
+      - name: Test packages helpers
+        run: go test -tags packages ./cmd/pkgcheck -count=1
+
       - name: Validate GoReleaser config
         uses: goreleaser/goreleaser-action@v6
         with:

@@ -185,18 +185,44 @@ jobs:
       # 1. GENERAR — escribe solo en dist/ porque skip_upload es true
       #    en el config por defecto.
       # ---------------------------------------------------------------
+      # Los --skip de gestores se calculan ANTES de generar, porque la
+      # fase 1 y la fase 3 deben usar EXACTAMENTE el mismo conjunto.
+      #
+      # Si la generación produjera los tres manifiestos y la publicación
+      # solo los seleccionados, --clean borraría los no publicados y la
+      # comparación final fallaría por archivos ausentes (o, peor, se
+      # compararían conjuntos distintos).
+      - name: Compute skip list
+        id: skip
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          SKIP=""
+          for t in homebrew scoop winget; do
+            case ",$TARGETS," in
+              *",$t,"*) : ;;
+              *) SKIP="$SKIP,$t" ;;
+            esac
+          done
+          SKIP="${SKIP#,}"
+          echo "value=${SKIP}" >> "$GITHUB_OUTPUT"
+          echo "gestores seleccionados: $TARGETS"
+          echo "gestores omitidos: '${SKIP:-ninguno}'"
+
       - name: Generate manifests (local only)
         uses: goreleaser/goreleaser-action@v6
         with:
           version: v2.19.0
-          # MISMA configuración que la fase de publicación. Solo cambia
-          # SKIP_PACKAGE_UPLOAD, que vale true aquí: los manifiestos se
-          # escriben en dist/ y no se toca ningún repositorio destino.
+          # MISMA configuración Y MISMOS --skip de gestor que la fase de
+          # publicación. Solo cambia SKIP_PACKAGE_UPLOAD, que vale true
+          # aquí: los manifiestos se escriben en dist/ y no se toca ningún
+          # repositorio destino.
           #
-          # Compartir config es lo que garantiza que se publica
-          # exactamente lo verificado; con dos archivos distintos habría
-          # que demostrar su equivalencia.
-          args: release --clean -f .goreleaser-publish.yaml --skip=publish,validate
+          # Compartir ambos es lo que hace comparables las dos fases: se
+          # generan exactamente los manifiestos que se van a publicar.
+          args: >-
+            release --clean -f .goreleaser-publish.yaml --skip=publish,validate${{ steps.skip.outputs.value != '' && format(',{0}', steps.skip.outputs.value) || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -208,6 +234,8 @@ jobs:
           WINGET_TOKEN: ""
 
       - name: Assert nothing was published in generation phase
+        env:
+          TARGETS: ${{ inputs.targets }}
         run: |
           set -euo pipefail
           # La fase de generación no debe haber creado dist/git/ (clone de
@@ -217,9 +245,30 @@ jobs:
             ls -la dist/git
             exit 1
           fi
-          test -f dist/scoop/bucket/mobatui.json || { echo "::error::no se generó el manifiesto de Scoop"; exit 1; }
-          test -f dist/homebrew/Casks/mobatui.rb || { echo "::error::no se generó el Cask"; exit 1; }
-          echo "manifiestos generados en dist/, ningún repo destino tocado"
+
+          # Solo se exigen los manifiestos de los gestores seleccionados:
+          # pedir los tres aquí rompía targets=homebrew, scoop o winget.
+          CHECKED=0
+          case ",$TARGETS," in
+            *",homebrew,"*)
+              test -f dist/homebrew/Casks/mobatui.rb \
+                || { echo "::error::no se generó el Cask"; exit 1; }
+              CHECKED=$((CHECKED+1)) ;;
+          esac
+          case ",$TARGETS," in
+            *",scoop,"*)
+              test -f dist/scoop/bucket/mobatui.json \
+                || { echo "::error::no se generó el manifiesto de Scoop"; exit 1; }
+              CHECKED=$((CHECKED+1)) ;;
+          esac
+          case ",$TARGETS," in
+            *",winget,"*)
+              test -n "$(find dist/winget -name '*.yaml' -type f 2>/dev/null)" \
+                || { echo "::error::no se generaron los manifiestos de WinGet"; exit 1; }
+              CHECKED=$((CHECKED+1)) ;;
+          esac
+
+          echo "manifiestos generados en dist/ para $CHECKED gestor(es), ningún repo destino tocado"
 
       # ---------------------------------------------------------------
       # 2. VERIFICAR — antes de cualquier escritura remota.
@@ -235,15 +284,44 @@ jobs:
 
       # Guarda los hashes de lo verificado para compararlos con lo que la
       # fase 3 genere y publique.
+      # Lista de manifiestos SOLO de los gestores seleccionados.
+      #
+      # Antes se listaban las tres rutas siempre: con targets=homebrew,scoop
+      # la fase de publicación omite winget, --clean borra sus archivos y
+      # la comparación fallaba por algo que nunca se iba a publicar.
       - name: Record verified manifest hashes
+        env:
+          TARGETS: ${{ inputs.targets }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/verified
-          sha256sum dist/scoop/bucket/mobatui.json \
-                    dist/homebrew/Casks/mobatui.rb \
-                    dist/winget/manifests/*/*/*/*/*.yaml \
+          : > /tmp/verified/files.txt
+          case ",$TARGETS," in
+            *",homebrew,"*) echo "homebrew/Casks/mobatui.rb" >> /tmp/verified/files.txt ;;
+          esac
+          case ",$TARGETS," in
+            *",scoop,"*) echo "scoop/bucket/mobatui.json" >> /tmp/verified/files.txt ;;
+          esac
+          case ",$TARGETS," in
+            *",winget,"*) find dist/winget -name '*.yaml' -type f \
+                             | sed 's|^dist/||' >> /tmp/verified/files.txt ;;
+          esac
+
+          test -s /tmp/verified/files.txt || {
+            echo "::error::ningún manifiesto para los targets '$TARGETS'"
+            exit 1
+          }
+
+          # Deben existir AHORA: si falta uno, el problema es de generación.
+          MISSING=0
+          while read -r f; do
+            [ -f "dist/$f" ] || { echo "::error::falta dist/$f"; MISSING=1; }
+          done < /tmp/verified/files.txt
+          test "$MISSING" = "0" || exit 1
+
+          while read -r f; do sha256sum "dist/$f"; done < /tmp/verified/files.txt \
             | sed 's|dist/||' | sort > /tmp/verified/hashes.txt
-          echo "manifiestos verificados:"
+          echo "manifiestos verificados ($(wc -l < /tmp/verified/files.txt)):"
           cat /tmp/verified/hashes.txt
 
       # Sobre VERIFICAR: si pkgcheck falla, el workflow se detiene AQUÍ y
@@ -253,23 +331,6 @@ jobs:
       # ---------------------------------------------------------------
       # 3. Calcular qué gestores se omiten en la publicación.
       # ---------------------------------------------------------------
-      - name: Compute skip list for publication
-        id: skip
-        env:
-          TARGETS: ${{ inputs.targets }}
-        run: |
-          set -euo pipefail
-          SKIP=""
-          for t in homebrew scoop winget; do
-            case ",$TARGETS," in
-              *",$t,"*) : ;;
-              *) SKIP="$SKIP,$t" ;;
-            esac
-          done
-          SKIP="${SKIP#,}"
-          echo "value=${SKIP}" >> "$GITHUB_OUTPUT"
-          echo "gestores omitidos en publicación: '${SKIP:-ninguno}'"
-
       # ---------------------------------------------------------------
       # 3. PUBLICAR — solo si la verificación pasó.
       # ---------------------------------------------------------------
@@ -317,16 +378,23 @@ jobs:
       - name: Assert published manifests equal verified ones
         run: |
           set -euo pipefail
-          sha256sum dist/scoop/bucket/mobatui.json \
-                    dist/homebrew/Casks/mobatui.rb \
-                    dist/winget/manifests/*/*/*/*/*.yaml \
+          MISSING=0
+          while read -r f; do
+            [ -f "dist/$f" ] || { echo "::error::falta dist/$f tras publicar"; MISSING=1; }
+          done < /tmp/verified/files.txt
+          test "$MISSING" = "0" || {
+            echo "::error::la fase de publicación no generó los manifiestos esperados"
+            exit 1
+          }
+
+          while read -r f; do sha256sum "dist/$f"; done < /tmp/verified/files.txt \
             | sed 's|dist/||' | sort > /tmp/verified/after.txt
           if ! diff -u /tmp/verified/hashes.txt /tmp/verified/after.txt; then
             echo "::error::los manifiestos publicados NO coinciden con los verificados"
             echo "::error::revisa los cambios de configuración entre fases"
             exit 1
           fi
-          echo "manifiestos publicados == verificados (sha256 idénticos)"
+          echo "manifiestos publicados == verificados (sha256 idénticos, $(wc -l < /tmp/verified/files.txt) archivos)"
 
       # ---------------------------------------------------------------
       # 4. COMPROBAR — la GitHub Release es idéntica.

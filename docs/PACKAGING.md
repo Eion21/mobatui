@@ -769,3 +769,52 @@ valida el formato con `^v[0-9]+\.[0-9]+\.[0-9]+$` (un patrón laxo como
 
 La última es una prueba sobre el propio workflow: si alguien quita el
 `ref`, el test falla en CI.
+
+---
+
+## 16. Selección de gestores por `targets`
+
+El workflow acepta cinco combinaciones y **ambas fases usan el mismo
+conjunto**: los `--skip=<gestor>` se calculan una sola vez, antes de
+generar, y se pasan tanto a la generación como a la publicación.
+
+Antes la generación producía los tres manifiestos y la publicación solo
+los seleccionados: con `--clean`, los archivos no publicados
+desaparecían y la comparación final fallaba por archivos ausentes.
+
+Los pasos que dependen de los gestores leen `inputs.targets`:
+
+| Paso | Antes | Ahora |
+|---|---|---|
+| `Assert nothing was published` | exigía Cask y Scoop siempre | exige solo los seleccionados |
+| `Record verified manifest hashes` | tres rutas fijas | lista según `targets` |
+| `Assert published manifests equal verified` | tres rutas fijas | misma lista que el paso anterior |
+
+### Verificación con repositorios Git locales
+
+Cinco combinaciones, con tres repos destino (`hb`, `sc`, `wg`):
+
+| `targets` | Manifiestos | Antes == después | Publica | No publica |
+|---|---|---|---|---|
+| `homebrew,scoop` | 2 | ✅ | hb, sc | wg |
+| `homebrew,scoop,winget` | 5 | ✅ | hb, sc, wg | — |
+| `homebrew` | 1 | ✅ | hb | sc, wg |
+| `scoop` | 1 | ✅ | sc | hb, wg |
+| `winget` | 3 | ✅ | wg | hb, sc |
+
+**Resultado: 5/5.** Cada caso comprueba además que **no se genera ni se
+publica** ningún gestor no seleccionado.
+
+### Detalle: ramas distintas por destino
+
+El bucket de WinGet usa la rama `master`; el tap y el bucket de Scoop usan
+`main`. Una prueba que asuma una sola rama da falsos negativos: el commit
+se crea, pero se busca en la rama equivocada.
+
+### Pruebas negativas
+
+| Escenario | Resultado |
+|---|---|
+| Reejecutar un gestor ya publicado | **Falla controlado** (nada que commitear), sin duplicar |
+| Recuperación `scoop` tras publicar `homebrew` | ✅ Scoop 1→2 commits, Homebrew intacto en 2 |
+| Divergencia real (modificar un manifiesto) | ✅ **detectada** por la comparación de sha256 |
