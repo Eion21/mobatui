@@ -23,13 +23,13 @@ Built in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [L
 ### Build and items view (Deadlock)
 > Truecolor cards by phase (`EARLY`, `MID`, `LATE`), component upgrades (`↑`), estimated timing, soul cost, skill max order (`max 3 > 1 > 2 > 4`), and win-rate trends across patches.
 
-![Deadlock build and items view](docs/screenshots/deadlock-build.jpg)
+![Deadlock build and items view](docs/screenshots/deadlock-build.png)
 
 ### Game selector and hero list
 
 | Main menu and active monitor | Filterable list ranked by Wilson lower bound |
 | --- | --- |
-| ![Main menu and active monitor](docs/screenshots/game-select.png) | ![Filterable hero list ranked by Wilson score](docs/screenshots/hero-list.jpg) |
+| ![Main menu and active monitor](docs/screenshots/game-select.png) | ![Filterable hero list ranked by Wilson score](docs/screenshots/hero-list.png) |
 
 ---
 
