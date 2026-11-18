@@ -32,12 +32,81 @@ import (
 	"time"
 )
 
+// target identifica un gestor de paquetes.
+type target string
+
+const (
+	targetHomebrew target = "homebrew"
+	targetScoop    target = "scoop"
+	targetWinget   target = "winget"
+)
+
+// parseTargets convierte la lista separada por comas en un conjunto.
+//
+// Rechaza vacío, duplicados y valores desconocidos. Un duplicado no es
+// inocuo: 'homebrew,homebrew' sugiere que quien lo escribió esperaba dos
+// gestores distintos, y verificarlo una sola vez ocultaría el error.
+func parseTargets(raw string) (map[target]bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, fmt.Errorf("vacío; indica al menos uno de homebrew, scoop, winget")
+	}
+
+	selected := make(map[target]bool, 3)
+	var unknown, dup []string
+	for _, part := range strings.Split(trimmed, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, fmt.Errorf("contiene un elemento vacío en %q", raw)
+		}
+		t := target(name)
+		switch t {
+		case targetHomebrew, targetScoop, targetWinget:
+		default:
+			unknown = append(unknown, name)
+			continue
+		}
+		if selected[t] {
+			dup = append(dup, name)
+			continue
+		}
+		selected[t] = true
+	}
+
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("gestor desconocido: %s (válidos: homebrew, scoop, winget)",
+			strings.Join(unknown, ", "))
+	}
+	if len(dup) > 0 {
+		return nil, fmt.Errorf("gestor duplicado: %s", strings.Join(dup, ", "))
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("ningún gestor válido en %q", raw)
+	}
+	return selected, nil
+}
+
+// sortedTargets devuelve los seleccionados en orden fijo, para que la
+// salida sea reproducible.
+func sortedTargets(selected map[target]bool) []string {
+	var out []string
+	for _, t := range []target{targetHomebrew, targetScoop, targetWinget} {
+		if selected[t] {
+			out = append(out, string(t))
+		}
+	}
+	return out
+}
+
 func main() {
 	tag := flag.String("tag", "", "tag publicado, p. ej. v0.2.1")
 	dist := flag.String("dist", "dist", "directorio con los manifiestos generados")
 	repo := flag.String("repo", "Eion21/mobatui", "repositorio de la release")
+	targets := flag.String("targets", "homebrew,scoop,winget",
+		"gestores a verificar, separados por coma: homebrew, scoop, winget")
 	noNet := flag.Bool("no-network", false, "solo comprobaciones locales (no verifica assets)")
 	requireAssets := flag.Bool("require-assets", true, "exigir que cada URL sea un asset real de la release")
+	apiBase := flag.String("api-base", "", "raíz de la API de GitHub (por defecto https://api.github.com)")
 	flag.Parse()
 
 	if *tag == "" {
@@ -45,14 +114,39 @@ func main() {
 		os.Exit(2)
 	}
 
-	c := &checker{tag: *tag, dist: *dist, repo: *repo, requireAssets: *requireAssets}
+	// Los targets se validan ANTES de tocar nada: un valor vacío,
+	// duplicado o desconocido aborta con exit 2 en lugar de verificar
+	// menos gestores de los pedidos (o ninguno) y salir con éxito.
+	selected, err := parseTargets(*targets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "-targets: %v\n", err)
+		os.Exit(2)
+	}
+
+	c := &checker{
+		tag: *tag, dist: *dist, repo: *repo,
+		requireAssets: *requireAssets,
+		apiBase:       *apiBase,
+		targets:       selected,
+	}
 	if !*noNet {
 		c.client = &http.Client{Timeout: 120 * time.Second}
 	}
 
-	c.checkScoop()
-	c.checkWinget()
-	c.checkCask()
+	fmt.Printf("targets: %s\n", strings.Join(sortedTargets(selected), ","))
+
+	// Solo los verificadores de los gestores seleccionados. Los omitidos
+	// no se comprueban: en una ejecución con targets=homebrew,scoop sus
+	// manifiestos ni siquiera existen, y exigirlos daría un falso fallo.
+	if selected[targetHomebrew] {
+		c.checkCask()
+	}
+	if selected[targetScoop] {
+		c.checkScoop()
+	}
+	if selected[targetWinget] {
+		c.checkWinget()
+	}
 
 	fmt.Printf("\n%d comprobaciones superadas, %d fallos\n", c.total, len(c.failures))
 	for _, f := range c.failures {
@@ -61,7 +155,13 @@ func main() {
 	if len(c.failures) > 0 {
 		os.Exit(1)
 	}
-	fmt.Println("todos los manifiestos apuntan a artefactos publicados y verificados")
+	if c.total == 0 {
+		// Sin comprobaciones no se puede afirmar nada: equivale a fallo.
+		fmt.Fprintln(os.Stderr, "no se ejecutó ninguna comprobación")
+		os.Exit(1)
+	}
+	fmt.Printf("manifiestos de %s: apuntan a artefactos publicados y verificados\n",
+		strings.Join(sortedTargets(selected), ","))
 }
 
 type asset struct {
@@ -76,8 +176,14 @@ type checker struct {
 	repo          string
 	client        *http.Client
 	requireAssets bool
-	total         int
-	failures      []string
+	// apiBase es la raíz de la API de GitHub. Se puede cambiar para
+	// apuntar a un servidor de prueba; por defecto, la real.
+	apiBase string
+	// targets indica qué gestores se verifican. Los no seleccionados no
+	// se miran: sus manifiestos no existen en esa ejecución.
+	targets  map[target]bool
+	total    int
+	failures []string
 
 	assets     map[string]asset // nombre -> asset de la release
 	assetsOnce bool
@@ -117,7 +223,11 @@ func (c *checker) loadAssets() (map[string]asset, error) {
 		return nil, c.assetsErr
 	}
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", c.repo, c.tag)
+	base := c.apiBase
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", base, c.repo, c.tag)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		c.assetsErr = err

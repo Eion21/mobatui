@@ -818,3 +818,70 @@ se crea, pero se busca en la rama equivocada.
 | Reejecutar un gestor ya publicado | **Falla controlado** (nada que commitear), sin duplicar |
 | Recuperación `scoop` tras publicar `homebrew` | ✅ Scoop 1→2 commits, Homebrew intacto en 2 |
 | Divergencia real (modificar un manifiesto) | ✅ **detectada** por la comparación de sha256 |
+
+---
+
+## 17. pkgcheck respeta los gestores seleccionados
+
+**Bug corregido:** `pkgcheck` ejecutaba siempre los tres verificadores
+(`checkCask`, `checkScoop`, `checkWinget`). Con
+`targets=homebrew,scoop` —el valor por defecto— el manifiesto de WinGet
+no existe, así que la verificación fallaba por un gestor que no se iba a
+publicar. Era el mismo patrón que el bug anterior del workflow, pero
+dentro del verificador.
+
+### La opción
+
+```
+-targets homebrew,scoop
+```
+
+- Por defecto: `homebrew,scoop,winget` (compatible con los usos
+  existentes).
+- Solo se ejecutan los verificadores de los gestores seleccionados.
+- Se rechazan los targets **vacíos, con elementos vacíos, desconocidos o
+  duplicados**, con exit 2 y sin verificar nada. Un duplicado no es
+  inocuo: `homebrew,homebrew` sugiere que se esperaban dos gestores
+  distintos.
+- Si falta el manifiesto de un gestor **seleccionado**, falla.
+- Si no se ejecutó ninguna comprobación, falla: no se puede declarar
+  éxito sin haber verificado nada.
+
+**La verificación de assets NO se desactiva.** `-require-assets` sigue en
+`true`: cada URL se compara con un asset real de la release y con su
+sha256. Hay un test que falla si el workflow introduce `-no-network`.
+
+### Cómo se probó
+
+Flujo completo por combinación, con el `pkgcheck` **real**:
+
+```
+generar → pkgcheck → registrar hashes → publicar → comparar hashes
+```
+
+`pkgcheck` se ejecutó contra un **servidor de API falso** (opción
+`-api-base`) que sirve los assets publicados de verdad, así que la
+comprobación de existencia y de sha256 es real, no simulada.
+
+| `targets` | Comprobaciones | Asset ausente | Hash malo | Publica | Divergencia |
+|---|---|---|---|---|---|
+| `homebrew,scoop` | **31** | ✅ bloquea | ✅ bloquea | hb, sc | ✅ detectada |
+| `homebrew,scoop,winget` | **57** | ✅ bloquea | ✅ bloquea | hb, sc, wg | ✅ detectada |
+| `homebrew` | **19** | ✅ bloquea | ✅ bloquea | hb | ✅ detectada |
+| `scoop` | **12** | ✅ bloquea | ✅ bloquea | sc | ✅ detectada |
+| `winget` | **26** | ✅ bloquea | ✅ bloquea | wg | ✅ detectada |
+
+**5/5.** El número de comprobaciones distinto por caso demuestra que
+`pkgcheck` filtra de verdad y no ejecuta siempre lo mismo.
+
+### Regresiones en CI
+
+`cmd/pkgcheck/targets_test.go`, 5 pruebas que se suman a las 6 de tag:
+
+| Prueba | Qué fija |
+|---|---|
+| `TestParseTargets` | 6 válidos; 9 inválidos (vacío, desconocido, duplicado) |
+| `TestSoloVerificaSeleccionados` | Con Homebrew+Scoop presentes, no exige WinGet |
+| `TestNoExigeOmitidos` | `targets=homebrew` no falla por scoop ni winget ausentes |
+| `TestManifiestoInvalidoFalla` | Un Cask con nombre incorrecto se detecta |
+| `TestWorkflowPasaTargets` | El YAML pasa `-targets` y no usa `-no-network` |

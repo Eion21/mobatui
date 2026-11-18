@@ -277,10 +277,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
+          TARGETS: ${{ inputs.targets }}
         run: |
           set -euo pipefail
+          # -targets: se verifican SOLO los gestores seleccionados. Los
+          # omitidos no tienen manifiesto en esta ejecución, así que
+          # exigirlos daría un falso fallo (era el caso por defecto
+          # homebrew,scoop, que no genera WinGet).
+          #
+          # La verificación de assets NO se desactiva: -require-assets
+          # sigue en true, de modo que cada URL se compara con un asset
+          # real de la release y con su sha256.
           go run -tags packages ./cmd/pkgcheck \
-            -tag "$TAG" -dist dist -repo "$GITHUB_REPOSITORY"
+            -tag "$TAG" -dist dist -repo "$GITHUB_REPOSITORY" \
+            -targets "$TARGETS"
 
       # Guarda los hashes de lo verificado para compararlos con lo que la
       # fase 3 genere y publique.
