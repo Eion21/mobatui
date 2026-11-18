@@ -62,6 +62,12 @@ type APIClient struct {
 	onProgress func(done, total int, name string)
 	// fellBack se activa cuando la carga terminó sirviendo fixtures.
 	fellBack bool
+	// runsOrigin guarda la procedencia de la muestra de cada héroe
+	// (estado de caché y fecha de los datos). Es POR HÉROE: Cache.Last()
+	// es global y con consultas concurrentes podía devolver la de otra
+	// respuesta.
+	runsOriginMu sync.Mutex
+	runsOrigin   map[int]RunOrigin
 	// runsCat/runsComps memorizan el catálogo de tienda y sus cadenas
 	// para no re-decodificar 782 ítems en cada consulta de ruta.
 	runsCatMu sync.Mutex

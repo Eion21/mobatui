@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -285,6 +284,32 @@ var (
 // partidas por héroe son unos pocos MB como mucho.
 const runsMemoMax = 8
 
+// RunOrigin describe de dónde salió la muestra de partidas de un héroe
+// y cuándo se obtuvieron esos datos. Es por héroe: la antigüedad
+// pertenece a la MUESTRA, no a cada objeto de la ruta.
+type RunOrigin struct {
+	// State es el estado de caché: hit, miss, stale o fixed.
+	State string
+	// FetchedAt es la fecha de los datos. Zero = desconocida; en ese
+	// caso no se inventa una antigüedad.
+	FetchedAt time.Time
+}
+
+// Age devuelve cuánto tiempo tienen los datos, o false si se desconoce.
+func (o RunOrigin) Age(now time.Time) (time.Duration, bool) {
+	if o.FetchedAt.IsZero() {
+		return 0, false
+	}
+	return now.Sub(o.FetchedAt), true
+}
+
+// Stale indica si los datos se sirvieron de una entrada caducada, o si
+// proceden de un respaldo local: en ambos casos no son la descarga
+// fresca de esta consulta.
+func (o RunOrigin) Stale() bool {
+	return o.State == "stale" || o.State == "fixed"
+}
+
 // memoKey identifica una consulta de runs de forma inequívoca.
 func memoKey(hero, minBadge, limit int, fetchedAt time.Time) string {
 	return fmt.Sprintf("%d|%d|%d|%d", hero, minBadge, limit, fetchedAt.UnixNano())
@@ -404,20 +429,33 @@ func (a *APIClient) runsCatalog() (map[int]apiItem, map[int][]int, error) {
 // (decenas de KB por partida) nunca se retiene ni se cachea; lo que
 // queda en caché es el resultado agregado (las Run).
 func (a *APIClient) FetchRuns(ctx context.Context, hero, minBadge, limit int) ([]Run, error) {
-	// El catálogo (782 ítems) se necesita para clasificar las compras,
-	// pero no cambia entre llamadas: se resuelve una sola vez por
-	// cliente y se reutiliza. Antes se recargaba y re-decodificaba en
-	// cada FetchRuns, y ese era el 90 % del tiempo de una consulta
-	// repetida.
+	// Primero el catálogo: sin él no se puede ni construir la URL de forma
+	// útil (y su error no debe provocar reintentos de red de la muestra).
 	shop, comps, err := a.runsCatalog()
 	if err != nil {
 		return nil, err
 	}
-	shopSet := make(map[int]bool, len(shop))
-	for id := range shop {
-		shopSet[id] = true
-	}
+	path := a.runsPath(hero, minBadge, limit)
 
+	// Deduplicación: la UI lanza Ruta y build híbrida a la vez (tea.Batch)
+	// y ambas piden LA MISMA muestra. La clave es la URL completa, así que
+	// héroes distintos no se bloquean entre sí.
+	runs, origin, err := joinRuns(ctx, a.apiBase+path, func() ([]Run, RunOrigin, error) {
+		return a.fetchRunsOnce(ctx, path, hero, shop, comps)
+	})
+	if err != nil {
+		return nil, err
+	}
+	// La procedencia se publica por héroe con la fecha DEL RESULTADO. Si
+	// otra petición del mismo héroe termina después, su procedencia es la
+	// de SU respuesta: no se pisa la de esta.
+	a.setRunOrigin(hero, origin)
+	return runs, nil
+}
+
+// runsPath construye la ruta de la muestra. Es la identidad de la
+// solicitud: héroe, filtros y límite.
+func (a *APIClient) runsPath(hero, minBadge, limit int) string {
 	q := url.Values{
 		"hero_ids":             {fmt.Sprint(hero)},
 		"game_mode":            {"normal"},
@@ -430,33 +468,25 @@ func (a *APIClient) FetchRuns(ctx context.Context, hero, minBadge, limit int) ([
 	if minBadge > 0 {
 		q.Set("min_average_badge", fmt.Sprint(minBadge))
 	}
-	path := "/v1/matches/metadata?" + q.Encode()
+	return "/v1/matches/metadata?" + q.Encode()
+}
+
+// fetchRunsOnce resuelve la muestra de un héroe: caché, descarga con
+// reintento acotado, memo y decodificación.
+func (a *APIClient) fetchRunsOnce(ctx context.Context, path string, hero int, shop map[int]apiItem, comps map[int][]int) ([]Run, RunOrigin, error) {
+	shopSet := make(map[int]bool, len(shop))
+	for id := range shop {
+		shopSet[id] = true
+	}
+
+	// Se consulta la caché sin fetch para saber si ya hay una entrada
+	// utilizable (aunque esté caducada). Con entrada, un fallo de fuente
+	// se resuelve con stale-if-error y NO se reintenta: pedir dos veces
+	// no aporta nada.
+	staleExists := a.c.HasEntry(a.apiBase + path)
 
 	fetch := func() ([]byte, error) {
-		if err := waitMetaSlot(ctx); err != nil {
-			return nil, err
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.apiBase+path, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("User-Agent", userAgent)
-		resp, err := a.http.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusNotFound {
-			return []byte("null"), nil // sin partidas: ruta vacía, no error
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("deadlock-api: %s → HTTP %d", path, resp.StatusCode)
-		}
-		runs, err := decodeRuns(bufio.NewReaderSize(resp.Body, 1<<20), hero, shopSet, comps)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(runs)
+		return a.downloadRuns(ctx, path, hero, shopSet, comps, staleExists)
 	}
 	tGet := time.Now()
 	res, err := a.c.Get(a.apiBase+path, metaTTL, fetch)
@@ -464,29 +494,34 @@ func (a *APIClient) FetchRuns(ctx context.Context, hero, minBadge, limit int) ([
 		perfHook("cache.Get", time.Since(tGet))
 	}
 	if err != nil {
-		return nil, err
+		return nil, RunOrigin{}, err
 	}
 	// La fecha de los datos servidos forma parte de la clave: si la
 	// caché de disco se refresca, la entrada memorizada deja de
 	// coincidir y se vuelve a decodificar.
-	var fetchedAt time.Time
-	if _, at, ok := a.c.Last(); ok {
-		fetchedAt = at
-	}
-	key := memoKey(hero, minBadge, limit, fetchedAt)
+	//
+	// La fecha sale del RESULTADO de esta petición, no de Cache.Last():
+	// Last() es estado global y con consultas concurrentes —cambio de
+	// héroe rápido, o UI y precarga a la vez— podía devolver la fecha de
+	// otra respuesta, reutilizando una muestra que no correspondía.
+	// La clave incluye la URL (héroe, filtros y límite) y la fecha del
+	// resultado, así que dos peticiones con parámetros distintos o con
+	// muestras distintas nunca comparten entrada.
+	key := res.FetchedAt.Format("20060102150405.999999999") + "|" + path
+	origin := RunOrigin{State: string(res.State), FetchedAt: res.FetchedAt}
 	if runs, ok := memoGet(key); ok {
-		return runs, nil
+		return runs, origin, nil
 	}
 	var runs []Run
 	tDec := time.Now()
 	if err := json.Unmarshal(res.Body, &runs); err != nil {
-		return nil, fmt.Errorf("deadlock-api: runs inválidas: %w", err)
+		return nil, origin, fmt.Errorf("deadlock-api: runs inválidas: %w", err)
 	}
 	if perfHook != nil {
 		perfHook("json.Unmarshal", time.Since(tDec))
 	}
-	memoPut(key, fetchedAt, runs)
-	return runs, nil
+	memoPut(key, res.FetchedAt, runs)
+	return runs, origin, nil
 }
 
 // decodeRuns recorre el array de partidas sin retenerlo entero.
@@ -520,4 +555,23 @@ func decodeRuns(r *bufio.Reader, hero int, shop map[int]bool, comps map[int][]in
 // equipo del jugador contra el ganador ("Team0"/"Team1").
 func teamIdx(team, winning string) bool {
 	return strings.TrimPrefix(team, "Team") == strings.TrimPrefix(winning, "Team")
+}
+
+// setRunOrigin guarda la procedencia de la muestra de un héroe.
+func (a *APIClient) setRunOrigin(hero int, o RunOrigin) {
+	a.runsOriginMu.Lock()
+	if a.runsOrigin == nil {
+		a.runsOrigin = map[int]RunOrigin{}
+	}
+	a.runsOrigin[hero] = o
+	a.runsOriginMu.Unlock()
+}
+
+// RunOriginFor devuelve la procedencia de la muestra de un héroe.
+// ok=false si aún no se ha consultado.
+func (a *APIClient) RunOriginFor(hero int) (RunOrigin, bool) {
+	a.runsOriginMu.Lock()
+	defer a.runsOriginMu.Unlock()
+	o, ok := a.runsOrigin[hero]
+	return o, ok
 }
