@@ -902,6 +902,13 @@ func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
 		if s.hasArt(key) {
 			continue
 		}
+		// Un 404/410 conocido no se vuelve a pedir, sea cual sea el
+		// ancho: la identidad es el recurso (artResource), no la
+		// representación. Es el mismo guard que en los ítems; sin él,
+		// un 404 de runa se redescargaba en cada evento.
+		if s.artDidFail(key) {
+			continue
+		}
 		if !s.reserveArt(key) {
 			continue // ya hay una descarga en curso para esta clave
 		}
@@ -923,10 +930,15 @@ func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
 		for _, j := range jobs {
 			raw, err := rp.RuneIcon(j.id)
 			if err != nil || len(raw) == 0 {
+				// Igual que en los ítems: el fallo aplica a TODAS las
+				// claves que esperaban el recurso, y solo los
+				// definitivos (404/410) se memorizan.
+				s.markArtFailedForResource(j.key, classifyArtError(err))
 				continue
 			}
 			img, err := png.Decode(bytes.NewReader(raw))
 			if err != nil {
+				s.markArtFailedForResource(j.key, artFailCorrupt)
 				continue
 			}
 			// Igual que en los ítems: una sola descarga alimenta todas

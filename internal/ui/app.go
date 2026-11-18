@@ -343,6 +343,13 @@ func (s *Session) releaseArt(key artKey) {
 		return
 	}
 	res := s.resourceForLocked(key)
+	// Un Cmd en vuelo puede terminar DESPUÉS de InvalidateArt, que ya
+	// reinició los mapas. Solo se decrementa si el recurso sigue
+	// reservado: un contador negativo dejaría el recurso bloqueado para
+	// siempre (nunca llegaría a cero otra vez).
+	if _, vivo := s.runePending[res]; !vivo {
+		return
+	}
 	s.runePending[res]--
 	if s.runePending[res] <= 0 {
 		delete(s.runePending, res)
@@ -390,6 +397,10 @@ func (s *Session) InvalidateArt() {
 	defer s.runeArtMu.Unlock()
 	s.ItemArt = map[artKey]string{}
 	s.artFailed = map[artResource]artFailure{}
+	// Las reservas también se reinician: una reserva viva sin su Cmd
+	// dejaría el recurso bloqueado para siempre en esta sesión.
+	s.runePending = map[artResource]int{}
+	s.pendingKeys = map[artKey]bool{}
 }
 
 // ItemName resuelve el nombre real de un ítem con fallback.
