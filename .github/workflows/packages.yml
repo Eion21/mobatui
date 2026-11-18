@@ -1,0 +1,79 @@
+name: Packages
+
+# Comprueba que los manifiestos de los gestores de paquetes se generan y
+# son coherentes. NO publica nada: no sube manifiestos, no abre PRs en
+# Microsoft y no crea tags.
+#
+# Se ejecuta cuando cambia la configuración de empaquetado o el
+# verificador, no en cada push: no depende de este código.
+on:
+  pull_request:
+    paths:
+      - ".goreleaser.yaml"
+      - "cmd/pkgcheck/**"
+      - ".github/workflows/packages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    name: manifest structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # 'goreleaser check' valida el esquema del config. Es lo que detectó
+      # 'archives.builds' deprecado en v0.2.1.
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.19.0
+          args: check
+
+      # Snapshot SIN publicar y SIN los gestores que escriben fuera:
+      # --skip incluye publish para no tocar GitHub.
+      - name: Generate artifacts and manifests
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.19.0
+          args: release --snapshot --clean --skip=publish,validate
+
+      # El ZIP de Windows es un requisito DURO de WinGet y Scoop: si falta,
+      # los manifiestos apuntarían a un tar.gz que ninguno de los dos acepta.
+      - name: Require windows zip
+        run: |
+          set -euo pipefail
+          ls -l dist/*windows*.zip
+          test -n "$(ls dist/*windows*.zip 2>/dev/null)" || {
+            echo "FALTA el .zip de Windows: WinGet y Scoop lo necesitan"
+            exit 1
+          }
+
+      - name: Verify manifests
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oP '"version": "\K[^"]+' dist/scoop/bucket/mobatui.json)
+          echo "versión de los manifiestos: $VERSION"
+          go run -tags packages ./cmd/pkgcheck \
+            -tag "v${VERSION%%-SNAPSHOT*}" \
+            -dist dist \
+            -no-network
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manifests
+          path: |
+            dist/winget/**
+            dist/homebrew/**
+            dist/scoop/**
+          retention-days: 7
+          if-no-files-found: warn

@@ -1,0 +1,273 @@
+name: Publish packages
+
+# Publica los manifiestos de Homebrew, Scoop y WinGet de una release YA
+# publicada.
+#
+# ---------------------------------------------------------------------
+# SECUENCIA
+#
+#   0. Validar    tag publicado, no borrador; inventario de assets.
+#   1. Generar    goreleaser -f .goreleaser-publish.yaml con
+#                 SKIP_PACKAGE_UPLOAD=true  -> solo escribe en dist/
+#   2. Verificar  pkgcheck contra los assets REALES de la release
+#   3. Publicar   MISMA config, SKIP_PACKAGE_UPLOAD=false, --fail-fast
+#   4. Comprobar  la GitHub Release no cambió
+#
+# POR QUÉ UN SOLO ARCHIVO DE CONFIGURACIÓN
+#
+#   La fase 3 no reutiliza los manifiestos de la fase 1: GoReleaser los
+#   regenera al ejecutarse de nuevo (no hay subcomando para publicar
+#   archivos ya generados). Para que lo publicado sea exactamente lo
+#   verificado, ambas fases usan EL MISMO archivo y solo cambia
+#   SKIP_PACKAGE_UPLOAD. Así la equivalencia es por construcción, no por
+#   reproducibilidad observada. Verificado: sha256 idénticos.
+#
+# POR QUÉ --skip=publish NO SE USA EN LA FASE 3
+#
+#   cask, scoop y winget viven DENTRO de la fase de publicación
+#   (internal/pipe/publish/publish.go). --skip=publish los omitiría
+#   también, dejando un no-op silencioso.
+#
+# PUBLICACIÓN PARCIAL: NO ES ATÓMICA
+#
+#   --fail-fast evita que se intente el siguiente gestor tras un error,
+#   pero NO revierte lo ya escrito. Verificado: si Homebrew publica y
+#   Scoop falla, Homebrew queda publicado y el job termina en error.
+#   La recuperación es reejecutar con --skip=<gestor ya publicado>. Ver
+#   docs/PACKAGING.md §13.
+# ---------------------------------------------------------------------
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag ya publicado (ej. v0.2.1)"
+        required: true
+        type: string
+      targets:
+        description: "Gestores a publicar"
+        required: true
+        default: "homebrew,scoop"
+        type: choice
+        options:
+          - "homebrew,scoop"
+          - "homebrew,scoop,winget"
+          - "homebrew"
+          - "scoop"
+          - "winget"
+
+# Permisos mínimos sobre ESTE repositorio: solo leer. Sin contents:write
+# este workflow no puede modificar la release, los binarios ni los tags.
+# La escritura ocurre en otros repositorios con tokens propios.
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # ---------------------------------------------------------------
+      # 0. Validaciones previas
+      # ---------------------------------------------------------------
+      - name: Verify tag exists and is published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            v[0-9]*) : ;;
+            *) echo "::error::el tag '$TAG' no tiene el formato vX.Y.Z"; exit 1 ;;
+          esac
+          gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets \
+            --jq '"tag=\(.tagName) draft=\(.isDraft) prerelease=\(.isPrerelease) assets=\(.assets|length)"'
+          DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
+          test "$DRAFT" = "false" || { echo "::error::la release $TAG es un borrador"; exit 1; }
+
+      - name: Snapshot release state (before)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/before
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | "\(.name) \(.size)"' | sort > /tmp/before/assets.txt
+          echo "assets antes: $(wc -l < /tmp/before/assets.txt)"
+          gh release download "$TAG" --pattern checksums.txt --dir /tmp/before
+          test -s /tmp/before/checksums.txt || { echo "::error::checksums.txt vacío o ausente"; exit 1; }
+          sort /tmp/before/checksums.txt > /tmp/checksums.before
+          echo "checksums antes: $(wc -l < /tmp/checksums.before)"
+
+      - name: Require tokens for selected targets
+        env:
+          TARGETS: ${{ inputs.targets }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -euo pipefail
+          MISSING=0
+          need() {
+            local name="$1" val="$2" target="$3"
+            case ",$TARGETS," in
+              *",$target,"*)
+                if [ -z "${val:-}" ]; then
+                  echo "::error::$name no está configurado y se pidió $target"
+                  MISSING=1
+                fi ;;
+            esac
+          }
+          need HOMEBREW_TAP_TOKEN "$HOMEBREW_TAP_TOKEN" homebrew
+          need SCOOP_BUCKET_TOKEN "$SCOOP_BUCKET_TOKEN" scoop
+          need WINGET_TOKEN "$WINGET_TOKEN" winget
+          test "$MISSING" = "0" || { echo "::error::faltan tokens; no se genera ni se publica nada"; exit 1; }
+          echo "tokens presentes para: $TARGETS"
+
+      # ---------------------------------------------------------------
+      # 1. GENERAR — escribe solo en dist/ porque skip_upload es true
+      #    en el config por defecto.
+      # ---------------------------------------------------------------
+      - name: Generate manifests (local only)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.19.0
+          # MISMA configuración que la fase de publicación. Solo cambia
+          # SKIP_PACKAGE_UPLOAD, que vale true aquí: los manifiestos se
+          # escriben en dist/ y no se toca ningún repositorio destino.
+          #
+          # Compartir config es lo que garantiza que se publica
+          # exactamente lo verificado; con dos archivos distintos habría
+          # que demostrar su equivalencia.
+          args: release --clean -f .goreleaser-publish.yaml --skip=publish,validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SKIP_PACKAGE_UPLOAD: "true"
+          # Tokens vacíos en esta fase: aunque skip_upload fallara, no hay
+          # credenciales con las que escribir en un repo destino.
+          HOMEBREW_TAP_TOKEN: ""
+          SCOOP_BUCKET_TOKEN: ""
+          WINGET_TOKEN: ""
+
+      - name: Assert nothing was published in generation phase
+        run: |
+          set -euo pipefail
+          # La fase de generación no debe haber creado dist/git/ (clone de
+          # un repo destino) ni haber escrito nada fuera de dist/.
+          if [ -d dist/git ]; then
+            echo "::error::se clonó un repositorio destino durante la generación"
+            ls -la dist/git
+            exit 1
+          fi
+          test -f dist/scoop/bucket/mobatui.json || { echo "::error::no se generó el manifiesto de Scoop"; exit 1; }
+          test -f dist/homebrew/Casks/mobatui.rb || { echo "::error::no se generó el Cask"; exit 1; }
+          echo "manifiestos generados en dist/, ningún repo destino tocado"
+
+      # ---------------------------------------------------------------
+      # 2. VERIFICAR — antes de cualquier escritura remota.
+      # ---------------------------------------------------------------
+      - name: Verify manifests against published assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          go run -tags packages ./cmd/pkgcheck \
+            -tag "$TAG" -dist dist -repo "$GITHUB_REPOSITORY"
+
+      # Sobre VERIFICAR: si pkgcheck falla, el workflow se detiene AQUÍ y
+      # el paso de publicación nunca se ejecuta. Ningún repositorio externo
+      # recibe nada.
+
+      # ---------------------------------------------------------------
+      # 3. Calcular qué gestores se omiten en la publicación.
+      # ---------------------------------------------------------------
+      - name: Compute skip list for publication
+        id: skip
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          SKIP=""
+          for t in homebrew scoop winget; do
+            case ",$TARGETS," in
+              *",$t,"*) : ;;
+              *) SKIP="$SKIP,$t" ;;
+            esac
+          done
+          SKIP="${SKIP#,}"
+          echo "value=${SKIP}" >> "$GITHUB_OUTPUT"
+          echo "gestores omitidos en publicación: '${SKIP:-ninguno}'"
+
+      # ---------------------------------------------------------------
+      # 3. PUBLICAR — solo si la verificación pasó.
+      # ---------------------------------------------------------------
+      - name: Publish manifests to package repositories
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.19.0
+          # Config de publicación: skip_upload: false + release.disable.
+          #
+          # NO se pasa --skip=publish: cask, scoop y winget viven DENTRO
+          # de esa fase, así que omitirla dejaría el workflow en un no-op
+          # silencioso. Lo que evita tocar GitHub es release.disable en el
+          # propio archivo de configuración.
+          #
+          # Los gestores no seleccionados se omiten con --skip=<gestor>,
+          # que se añade más abajo.
+          # --fail-fast es imprescindible: cask, scoop y winget declaran
+          # ContinueOnError, así que sin él GoReleaser continúa con el
+          # siguiente gestor aunque el anterior falle, dejando escrituras
+          # parciales. Con --fail-fast, el primer error aborta el resto.
+          # Verificado: con un destino roto, sin --fail-fast Scoop sí
+          # escribía; con --fail-fast, no.
+          args: >-
+            release --clean -f .goreleaser-publish.yaml --fail-fast
+            --skip=validate,chocolatey,aur,aur-source,nix,krew,snapcraft,flatpak,srpm${{ steps.skip.outputs.value != '' && format(',{0}', steps.skip.outputs.value) || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Aquí sí se escribe: mismos manifiestos, ya verificados.
+          SKIP_PACKAGE_UPLOAD: "false"
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+
+      # ---------------------------------------------------------------
+      # 4. COMPROBAR — la GitHub Release es idéntica.
+      # ---------------------------------------------------------------
+      - name: Assert release unchanged
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/after
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | "\(.name) \(.size)"' | sort > /tmp/after/assets.txt
+          gh release download "$TAG" --pattern checksums.txt --dir /tmp/after
+          sort /tmp/after/checksums.txt > /tmp/after/checksums.sorted
+          diff -u /tmp/before/assets.txt /tmp/after/assets.txt || {
+            echo "::error::la lista de assets de la release CAMBIÓ"; exit 1; }
+          diff -u /tmp/checksums.before /tmp/after/checksums.sorted || {
+            echo "::error::checksums.txt de la release CAMBIÓ"; exit 1; }
+          echo "release $TAG sin cambios: mismos assets y mismos checksums"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manifests-${{ inputs.tag }}
+          path: |
+            dist/winget/**
+            dist/homebrew/**
+            dist/scoop/**
+          retention-days: 7
+          if-no-files-found: warn

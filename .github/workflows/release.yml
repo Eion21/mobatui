@@ -25,6 +25,17 @@ jobs:
           # validaron 'goreleaser check' y un snapshot completo antes de
           # v0.2.1. Al subir de versión, ejecutar 'goreleaser check' antes.
           version: v2.19.0
-          args: release --clean
+          # --skip=winget,scoop,homebrew es DELIBERADO.
+          #
+          # Este workflow solo publica los binarios y la GitHub Release.
+          # Los manifiestos de gestores de paquetes se actualizan aparte,
+          # en publish-packages.yml. Motivo: si la API de Homebrew, el
+          # bucket de Scoop o Microsoft/winget-pkgs fallan, este job debe
+          # seguir publicando la release, y los manifiestos se reintentan
+          # sin volver a compilar ni a tocar los binarios.
+          #
+          # Además, sin estos --skip, GoReleaser exige tokens y aborta
+          # ("map has no entry for key") si la variable no existe.
+          args: release --clean --skip=winget,scoop,homebrew
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
