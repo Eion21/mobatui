@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -119,8 +120,24 @@ type Session struct {
 	Names       Names
 	Version     string
 	ChampionArt map[string]champArt
-	ItemArt     map[int]string              // half-blocks pre-renderizados
-	ItemMeta    map[int]staticdata.ItemInfo // tier/categoría/coste/desc
+	// ItemArt cachea el arte ya renderizado por {id, cols, modo}. Antes
+	// se indexaba solo por id: un icono de 12 columnas se habría
+	// reutilizado a 4, mostrando el tamaño equivocado.
+	ItemArt  map[artKey]string
+	ItemMeta map[int]staticdata.ItemInfo // tier/categoría/coste/desc
+	// Provider es la fuente de iconos de la sesión. Se guarda para poder
+	// renderizar arte bajo demanda (Ruta/Alt./Runas) sin volver a
+	// resolverlo.
+	Provider staticdata.Provider
+	// RuneArt cachea el arte de runas ya renderizado por
+	// {id, cols, modo, parche}. Se rellena DE FORMA ASÍNCRONA: el Cmd
+	// descarga fuera del bucle y publica aquí al terminar.
+	//
+	// runeArtMu protege el mapa: la goroutine del Cmd escribe y el bucle
+	// de Update/View lee.
+	runeArtMu   sync.RWMutex
+	RuneArt     map[artKey]string
+	runePending map[artKey]bool
 	// Routes guarda la ruta de compra por héroe (Deadlock, carga bajo
 	// demanda al abrir el detalle): orden de consenso, cadena y tasas.
 	// nil = en curso; vacía = sin datos (muestra insuficiente o error).
@@ -160,10 +177,61 @@ type Session struct {
 	lolPlans map[lolPlanKey]*lolbuild.Plan
 }
 
-// renderItemArt pre-renderiza el icono de un ítem si no existe.
+// artKey identifica una entrada de arte renderizado. Incluye el tamaño
+// y el modo porque el resultado depende de ambos: reutilizar el arte de
+// 12 columnas en una línea compacta daría un icono deformado.
+//
+// El parche entra en la clave solo cuando se conoce: así un cambio de
+// parche invalida el arte sin almacenar combinaciones infinitas (el
+// mapa se limita al tope artCacheMax y se vacía al cambiar de parche).
+type artKey struct {
+	// Kind distingue ítem de runa. Sin él, un ítem y una runa con el
+	// mismo id y tamaño compartirían entrada, que es exactamente el
+	// error que se colaba al unificar la caché.
+	Kind  artKind
+	ID    int
+	Cols  int
+	Mode  artMode
+	Patch string
+}
+
+// artKind identifica el tipo de recurso del arte.
+type artKind uint8
+
+const (
+	artItem artKind = iota
+	artRune
+)
+
+// artMode distingue las variantes de render.
+type artMode uint8
+
+const (
+	artHalfBlock artMode = iota // bloques medios (por defecto)
+	artPlain                    // solo texto: terminal sin color
+)
+
+// artCacheMax acota el número de combinaciones almacenadas. Con 4
+// tamaños × 2 modos y ~300 ítems, el tope evita crecer sin control.
+const artCacheMax = 4096
+
+// renderItemArt pre-renderiza el icono de un ítem si no existe para esa
+// combinación de tamaño, modo y parche.
 func (s *Session) renderItemArt(p staticdata.Provider, id, cols int) {
-	if _, done := s.ItemArt[id]; done {
+	s.renderItemArtMode(p, id, cols, artHalfBlock)
+}
+
+// renderItemArtMode es renderItemArt con modo explícito.
+func (s *Session) renderItemArtMode(p staticdata.Provider, id, cols int, mode artMode) {
+	// Version es el parche vigente de Data Dragon.
+	key := artKey{Kind: artItem, ID: id, Cols: cols, Mode: mode, Patch: s.Version}
+	if _, done := s.ItemArt[key]; done {
 		return
+	}
+	if len(s.ItemArt) >= artCacheMax {
+		// El tope se alcanza solo con muchas combinaciones: se vacía
+		// entero en vez de llevar un LRU. El arte es reproducible.
+		s.ItemArt = map[artKey]string{}
 	}
 	raw, err := p.ItemIcon(id)
 	if err != nil {
@@ -173,7 +241,94 @@ func (s *Session) renderItemArt(p staticdata.Provider, id, cols int) {
 	if err != nil {
 		return
 	}
-	s.ItemArt[id] = imgrender.RenderAspect(img, cols, panelBg)
+	if mode == artPlain {
+		// Sin color: inicial del nombre, que no depende de la imagen.
+		s.ItemArt[key] = ""
+		return
+	}
+	s.ItemArt[key] = imgrender.RenderAspect(img, cols, panelBg)
+}
+
+// putArt publica arte ya renderizado en la caché de ítems.
+//
+// Es la ÚNICA escritura: la hace el Cmd asíncrono, nunca el bucle de
+// Update. Con runeArtMu el lector de View no ve el mapa a medias.
+func (s *Session) putArt(key artKey, art string) {
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
+	m := &s.ItemArt
+	if key.Kind == artRune {
+		m = &s.RuneArt
+	}
+	if *m == nil {
+		*m = map[artKey]string{}
+	}
+	if len(*m) >= artCacheMax {
+		*m = map[artKey]string{}
+	}
+	(*m)[key] = art
+}
+
+// hasArt indica si el arte ya está en caché (sin descargar).
+func (s *Session) hasArt(key artKey) bool {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	if key.Kind == artRune {
+		_, ok := s.RuneArt[key]
+		return ok
+	}
+	_, ok := s.ItemArt[key]
+	return ok
+}
+
+// runeArtPending marca una descarga en curso para no duplicarla.
+func (s *Session) reserveArt(key artKey) bool {
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
+	if _, ok := s.RuneArt[key]; ok {
+		return false
+	}
+	if s.runePending == nil {
+		s.runePending = map[artKey]bool{}
+	}
+	if s.runePending[key] {
+		return false
+	}
+	s.runePending[key] = true
+	return true
+}
+
+// releaseArt libera la reserva (haya o no arte).
+func (s *Session) releaseArt(key artKey) {
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
+	delete(s.runePending, key)
+}
+
+// RuneArtFor devuelve el arte de una runa o "" si no está disponible.
+func (s *Session) RuneArtFor(id, cols int) string {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	return s.RuneArt[artKey{Kind: artRune, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}]
+}
+
+// InvalidateRuneArt vacía la caché de arte de runas.
+func (s *Session) InvalidateRuneArt() {
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
+	s.RuneArt = map[artKey]string{}
+	s.runePending = map[artKey]bool{}
+}
+
+// ItemArtFor devuelve el arte de un ítem para el tamaño y modo dados.
+// Cadena vacía si no está disponible: la UI cae al nombre textual.
+func (s *Session) ItemArtFor(id, cols int) string {
+	return s.ItemArt[artKey{Kind: artItem, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}]
+}
+
+// InvalidateArt vacía la caché de arte (cambio de parche o de modo).
+func (s *Session) InvalidateArt() {
+	s.ItemArt = map[artKey]string{}
 }
 
 // ItemName resuelve el nombre real de un ítem con fallback.
@@ -272,10 +427,12 @@ func LoadSession(g model.Game, l Loader) (*Session, error) {
 	s := &Session{
 		Game:        g,
 		ChampionArt: map[string]champArt{},
-		ItemArt:     map[int]string{},
+		ItemArt:     map[artKey]string{},
+		RuneArt:     map[artKey]string{},
 	}
 	// Enriquecimiento tolerante a fallos.
 	if p := l.Providers[g]; p != nil {
+		s.Provider = p
 		s.Version, _ = p.Version()
 		// Clave de vigencia de las builds híbridas: si el parche o la
 		// fuente cambian, las builds guardadas dejan de usarse.
@@ -798,6 +955,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, listenMonitor(a.monCh)
+
+	case artLoadedMsg:
+		// Arte de runas descargado fuera del bucle: se publica en la
+		// caché de la sesión y se repinta. Si el usuario ya cambió de
+		// parche o de sesión, el arte se guarda bajo SU clave (que
+		// incluye parche), así que una respuesta tardía nunca pinta
+		// iconos de otro parche.
+		if a.session != nil {
+			for k, art := range m.Art {
+				a.session.putArt(k, art)
+			}
+			a.detail.sync()
+		}
+		return a, nil
 
 	case monStoppedMsg:
 		return a, nil

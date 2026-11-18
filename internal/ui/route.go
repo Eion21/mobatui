@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -24,6 +25,12 @@ type RouteStep struct {
 	UpgradeOf    int     // base más habitual (0 = compra directa)
 	ChainRate    float64 // de quienes lo compran, fracción que viene de UpgradeOf
 	UpgradedRate float64 // de la base: fracción de compradores que luego la mejoran
+
+	// DataState es el estado de caché de la MUESTRA de la que sale esta
+	// ruta ("hit", "miss", "stale", "fixed"). Igual en todos los pasos.
+	DataState string
+	// DataFetchedAt es la fecha de esa muestra. Zero = desconocida.
+	DataFetchedAt time.Time
 }
 
 // RunsLoader trae la ruta de compra de un héroe bajo demanda (al abrir
@@ -93,6 +100,11 @@ type HybridBuildView struct {
 	FinalItems int
 	// Spent es el gasto total en almas (0 = desconocido).
 	Spent int
+	// DataState y DataFetchedAt describen la MUESTRA de la que sale esta
+	// build. Comparte la procedencia con la ruta observada, así que la UI
+	// puede advertir de datos caducados del mismo modo.
+	DataState     string
+	DataFetchedAt time.Time
 }
 
 // BuildLoader trae la build híbrida de un héroe bajo demanda. Devuelve

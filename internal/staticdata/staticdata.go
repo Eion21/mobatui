@@ -40,6 +40,16 @@ type Provider interface {
 	ItemIcon(id int) ([]byte, error)
 }
 
+// RuneIconProvider lo implementan las fuentes con iconos de runa.
+//
+// Es una interfaz SEPARADA y opcional: no todas las fuentes ni todos los
+// parches publican estos recursos. Quien no la implemente simplemente
+// muestra el nombre textual de la runa, que es el comportamiento
+// correcto y no un fallo.
+type RuneIconProvider interface {
+	RuneIcon(id int) ([]byte, error)
+}
+
 // ItemDetailsProvider lo implementan las fuentes con metadatos de
 // ítem (tier, categoría, coste, descripción).
 type ItemDetailsProvider interface {

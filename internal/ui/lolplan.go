@@ -8,10 +8,16 @@ package ui
 // Data Dragon se reutiliza sin peticiones nuevas.
 
 import (
+	"bytes"
 	"fmt"
+	"image/png"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Eion21/mobatui/internal/imgrender"
+	"github.com/Eion21/mobatui/internal/staticdata"
 
 	"github.com/Eion21/mobatui/internal/lolbuild"
 	"github.com/Eion21/mobatui/internal/lolitems"
@@ -135,8 +141,10 @@ func (d detailView) routeViewA(plan *lolbuild.Plan) []string {
 	if len(plan.Steps) == 0 {
 		out = append(out, stDim.Render("  sin pasos de compra con muestra suficiente"))
 	}
-	for _, st := range plan.Steps {
-		out = append(out, d.routeStepLine(st))
+	// Cada paso lleva su zona para poder seleccionarlo y abrir su
+	// popup con el mouse, igual que las tarjetas de Ítems.
+	for i, st := range plan.Steps {
+		out = append(out, zoneMgr.Mark(fmt.Sprintf("card:%d", i), d.routeStepLine(st)))
 	}
 
 	// Botas: se muestran aparte, sin inventar una posición exacta.
@@ -150,7 +158,9 @@ func (d detailView) routeViewA(plan *lolbuild.Plan) []string {
 		}
 		line += stDim.Render(fmt.Sprintf(" · %s partidas · %s",
 			nThousand(b.Stats.Games), pct(model.Stats.WinRate(b.Stats))))
-		out = append(out, line)
+		// Las botas son la última fila de tabCardList: misma zona que
+		// las compras para que el clic y el teclado la alcancen.
+		out = append(out, zoneMgr.Mark(fmt.Sprintf("card:%d", len(plan.Steps)), line))
 	} else {
 		out = append(out, stDim.Render("  botas: sin recomendación con muestra suficiente"))
 	}
@@ -158,6 +168,34 @@ func (d detailView) routeViewA(plan *lolbuild.Plan) []string {
 	// Inventario final y estado de misión.
 	out = append(out, d.finalInventoryLines(plan)...)
 	return out
+}
+
+// smallArtCols es el ancho del icono compacto en Ruta y Alt.
+//
+// Tres columnas producen exactamente UNA fila de medio bloque. Con 4
+// el icono ocupa dos filas y rompería el formato de un paso por línea.
+const smallArtCols = 3
+
+// itemIconInline devuelve el icono compacto de un ítem con un espacio
+// final, o "" si no hay arte disponible.
+//
+// Degradación: sin PNG, sin proveedor o con terminal estrecho se
+// devuelve vacío y la línea queda exactamente como antes. No se hace
+// ninguna petición HTTP aquí: el arte se prerenderiza en la carga o al
+// abrir el detalle.
+func (d detailView) itemIconInline(id int) string {
+	if id <= 0 {
+		return ""
+	}
+	// En terminales muy estrechas el icono desplazaría el nombre.
+	if d.width > 0 && d.width < 60 {
+		return ""
+	}
+	icon := d.session.ItemArtFor(id, smallArtCols)
+	if icon == "" {
+		return ""
+	}
+	return icon + " "
 }
 
 // routeStepLine formatea un paso de compra.
@@ -171,7 +209,10 @@ func (d detailView) routeStepLine(st lolbuild.Step) string {
 			stWinrateGood.Render(" · por misión"))
 	}
 	pos := fmt.Sprintf("%d.", st.Slot)
-	line := fmt.Sprintf("  %s %s", stDim.Render(pos), stKeyName.Render(st.Name))
+	// Icono solo para compras reales: un objeto de misión no es una
+	// compra y ya lleva su propia etiqueta.
+	icon := d.itemIconInline(st.Item)
+	line := fmt.Sprintf("  %s %s%s", stDim.Render(pos), icon, stKeyName.Render(st.Name))
 	if st.BuyMinute > 0 {
 		line += stDim.Render(fmt.Sprintf(" · ~%d min", st.BuyMinute))
 	}
@@ -239,8 +280,44 @@ func (d detailView) finalInventoryLines(plan *lolbuild.Plan) []string {
 	// Completitud: nunca presentar un plan incompleto como completo.
 	if plan.Complete {
 		out = append(out, stWinrateGood.Render("  inventario completo"))
-	} else {
-		out = append(out, stWinrateBad.Render("  inventario incompleto: "+plan.Reason))
+		return out
+	}
+	out = append(out, stWinrateBad.Render("  inventario incompleto: "+plan.Reason))
+	out = append(out, d.candidateLines(plan)...)
+	return out
+}
+
+// candidateLines muestra los objetos que PODRÍAN completar el hueco.
+//
+// Etiqueta explícita: "sin orden observado". No son una sexta compra
+// observada ni aparecen dentro de item1..item5: la fuente no publica
+// inventarios finales ni coocurrencia con esta build, así que solo se
+// ofrece la estadística del objeto en este campeón/rol/parche.
+func (d detailView) candidateLines(plan *lolbuild.Plan) []string {
+	cands := plan.CandidatesFor()
+	if len(cands) == 0 {
+		// Sin datos suficientes: se mantiene el aviso de incompleto y no
+		// se inventa nada.
+		return nil
+	}
+	out := []string{
+		"",
+		stSection.Render("◆ CANDIDATOS PARA COMPLETAR · sin orden observado"),
+	}
+	if d.width >= 60 {
+		out = append(out, stDim.Render(
+			"  no son una sexta compra observada: la fuente no publica el inventario final"))
+	}
+	for _, c := range cands {
+		line := fmt.Sprintf("  · %s%s", d.itemIconInline(c.Item), stKeyName.Render(c.Name))
+		line += stDim.Render(fmt.Sprintf(" · %s partidas", nThousand(c.Stats.Games)))
+		if c.PickRate > 0 {
+			line += stDim.Render(fmt.Sprintf(" · pick %.0f%%", c.PickRate))
+		}
+		if c.WinRate > 0 {
+			line += stDim.Render(fmt.Sprintf(" · WR %s", pct(c.WinRate)))
+		}
+		out = append(out, line)
 	}
 	return out
 }
@@ -323,7 +400,9 @@ func (d detailView) alternativesViewB(plan *lolbuild.Plan) []string {
 				out = append(out, stDim.Render(fmt.Sprintf("  ↑ %s (ya listado)", a.Name)))
 				continue
 			}
-			out = append(out, d.alternativeLine(a))
+			// El índice de zona es el de tabCardList (una por candidato
+			// mostrado), para que el clic abra el popup correcto.
+			out = append(out, zoneMgr.Mark(fmt.Sprintf("card:%d", altZoneIdx(plan, a.Item)), d.alternativeLine(a)))
 		}
 	}
 	return out
@@ -331,7 +410,7 @@ func (d detailView) alternativesViewB(plan *lolbuild.Plan) []string {
 
 // alternativeLine formatea una alternativa con sus datos reales.
 func (d detailView) alternativeLine(a lolbuild.Alternative) string {
-	line := fmt.Sprintf("  %s", stKeyName.Render(a.Name))
+	line := fmt.Sprintf("  %s%s", d.itemIconInline(a.Item), stKeyName.Render(a.Name))
 	line += stDim.Render(fmt.Sprintf(" · %s partidas", nThousand(a.Stats.Games)))
 	line += stDim.Render(fmt.Sprintf(" · pick %.0f%%", a.PickRate))
 	if a.WinRate > 0 {
@@ -412,4 +491,321 @@ func statsFingerprint(cb *model.CleanBuild) uint64 {
 		item(bt.ItemStats)
 	}
 	return h
+}
+
+// ─── arte bajo demanda de Ruta y Alt. ─────────────────────────────
+
+// ensureTabArt prerenderiza el arte de los ítems que la pestaña actual
+// va a mostrar, solo si esa pestaña los usa.
+//
+// Es bajo demanda —al abrir Ruta o Alt.— y no una precarga global: no
+// toca Ítems, Runas ni ninguna otra pestaña, y no descarga nada de red
+// que no se fuera a descargar igualmente.
+func (d *detailView) ensureTabArt() {
+	if d.session == nil || d.session.Game != model.GameLoL {
+		return
+	}
+	// Runas: el arte se carga en un Cmd asíncrono (ver runeArtCmdFor);
+	// aquí no se descarga nada.
+	if d.tab == 4 {
+		return
+	}
+	if d.tab != 1 && d.tab != 2 { // 1 = Ruta, 2 = Alt.
+		return
+	}
+	// El arte de ítems se descarga en un Cmd asíncrono (itemArtCmdFor):
+	// descargarlo aquí bloqueaba el bucle de Bubble Tea, igual que pasaba
+	// con las runas antes de la fase 6.
+}
+
+// itemArtCmdFor devuelve un comando que descarga y renderiza el arte de
+// los ítems que la pestaña Ruta o Alt. va a mostrar.
+//
+// Se ejecuta FUERA del bucle de Bubble Tea: con el CDN lento, abrir Ruta
+// congelaba la interfaz.
+func itemArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
+	if s == nil || len(ids) == 0 || cols <= 0 {
+		return nil
+	}
+	p := s.Provider
+	if p == nil {
+		return nil
+	}
+	type job struct {
+		key artKey
+		id  int
+	}
+	var jobs []job
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		key := artKey{Kind: artItem, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}
+		if s.hasArt(key) {
+			continue
+		}
+		if !s.reserveArt(key) {
+			continue
+		}
+		jobs = append(jobs, job{key: key, id: id})
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		out := make(map[artKey]string, len(jobs))
+		defer func() {
+			for _, j := range jobs {
+				s.releaseArt(j.key)
+			}
+		}()
+		for _, j := range jobs {
+			raw, err := p.ItemIcon(j.id)
+			if err != nil || len(raw) == 0 {
+				continue
+			}
+			img, err := png.Decode(bytes.NewReader(raw))
+			if err != nil {
+				continue
+			}
+			out[j.key] = imgrender.RenderAspect(img, cols, panelBg)
+		}
+		return artLoadedMsg{Art: out}
+	}
+}
+
+// tabItemIDs devuelve los ids de ítem que muestra una pestaña de ruta o
+// alternativas, en orden y sin repetir.
+func tabItemIDs(tab int, plan *lolbuild.Plan) []int {
+	if plan == nil {
+		return nil
+	}
+	seen := map[int]bool{}
+	var out []int
+	add := func(id int) {
+		if id <= 0 || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if tab == 1 {
+		for _, st := range plan.Steps {
+			// Los objetos de misión no son compras: sin icono.
+			if !st.Quest {
+				add(st.Item)
+			}
+		}
+		return out
+	}
+	for _, g := range plan.Alternatives {
+		for _, a := range g.Items {
+			add(a.Item)
+		}
+	}
+	return out
+}
+
+// tabCardList devuelve las tarjetas ENFOCABLES de las pestañas Ruta (1)
+// y Alt. (2), en el mismo orden en que se dibujan.
+//
+// No es una lista nueva de datos: envuelve los ítems que el plan ya
+// calculó para que la selección y el popup de Ítems funcionen igual.
+// No altera el orden, las estadísticas ni las categorías.
+func (d detailView) tabCardList() []cardItem {
+	plan := d.lolPlan()
+	if plan == nil {
+		return nil
+	}
+	var out []cardItem
+	if d.tab == 1 {
+		// Ruta: un elemento por paso mostrado (incluidas las misiones,
+		// para que la selección no salte líneas), y las botas al final.
+		for _, st := range plan.Steps {
+			out = append(out, cardItem{
+				item: model.RankedItem{
+					ItemStats: model.ItemStats{ID: st.Item, Stats: st.Stats},
+					WinRate:   model.Stats.WinRate(st.Stats),
+				},
+				kind:  kindBuy,
+				order: st.Slot,
+				step:  st.Slot,
+			})
+		}
+		if len(plan.Boots) > 0 {
+			b := plan.Boots[0]
+			out = append(out, cardItem{
+				item: model.RankedItem{
+					ItemStats: model.ItemStats{ID: b.Item, Stats: b.Stats},
+					WinRate:   model.Stats.WinRate(b.Stats),
+				},
+				boot:  true,
+				order: b.Slot,
+				step:  b.Slot,
+			})
+		}
+		return out
+	}
+	// Alt.: en el mismo orden en que alternativesViewB las pinta, con
+	// un elemento por candidato mostrado (no por categoría) para que
+	// flechas y clic recorran lo que se ve.
+	for _, g := range plan.Alternatives {
+		for _, a := range g.Items {
+			out = append(out, cardItem{
+				item: model.RankedItem{
+					ItemStats: model.ItemStats{ID: a.Item, Stats: a.Stats},
+					WinRate:   a.WinRate,
+					PickRate:  a.PickRate,
+				},
+			})
+		}
+	}
+	return out
+}
+
+// altZoneIdx devuelve el índice de tabCardList correspondiente a un
+// ítem de las alternativas. Los candidatos se recorren en el mismo
+// orden en ambas funciones, así que basta contar hasta encontrarlo.
+func altZoneIdx(plan *lolbuild.Plan, item int) int {
+	i := 0
+	for _, g := range plan.Alternatives {
+		for _, a := range g.Items {
+			if a.Item == item {
+				return i
+			}
+			i++
+		}
+	}
+	return 0
+}
+
+// runeArtCols es el ancho del icono de runa. Tres columnas dan una fila,
+// igual que en Ruta y Alt.
+const runeArtCols = 3
+
+// ensureRuneArt prepara el arte de la página de runas que se va a
+// mostrar: keystone, primarias y secundarias.
+//
+// Bajo demanda y bajo tolerancia: si no hay proveedor de iconos de runa,
+// no hay recurso o el PNG está corrupto, la vista sigue mostrando los
+// nombres. Nunca se llama desde View().
+func (d *detailView) ensureRuneArt() {
+	// Ya NO descarga: el arte se pide con runeArtCmdFor desde Update, en
+	// un Cmd asíncrono. Se conserva por compatibilidad de las pruebas.
+	if d.session == nil || d.session.Game != model.GameLoL {
+		return
+	}
+}
+
+// runePageIDs devuelve los ids de runa de la página activa, en el orden
+// visual: keystone, primarias, secundarias.
+func runePageIDs(cb *model.CleanBuild) []int {
+	if cb == nil || len(cb.RunePages) == 0 {
+		return nil
+	}
+	p := cb.RunePages[0]
+	seen := map[int]bool{}
+	var out []int
+	add := func(id int) {
+		if id <= 0 || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	add(p.KeystoneID)
+	for _, id := range p.PrimaryIDs {
+		add(id)
+	}
+	for _, id := range p.SecondaryIDs {
+		add(id)
+	}
+	return out
+}
+
+// runeArtCmdFor devuelve un comando que descarga y renderiza el arte de
+// la página de runas ACTIVA fuera del bucle de Bubble Tea.
+//
+// Antes se hacía dentro de Update(): con el CDN lento, pulsar "5"
+// congelaba la interfaz hasta que respondiera la red. Ahora Update solo
+// lanza el comando y sigue atendiendo teclas.
+//
+// Devuelve nil si no hay nada que cargar (sin proveedor, arte ya
+// presente o descarga ya en curso para la misma clave).
+func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
+	if s == nil || len(ids) == 0 {
+		return nil
+	}
+	rp, ok := s.Provider.(staticdata.RuneIconProvider)
+	if !ok {
+		return nil
+	}
+	// Se reservan solo las claves que faltan y no están en curso.
+	type job struct {
+		key artKey
+		id  int
+	}
+	var jobs []job
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		key := artKey{Kind: artRune, ID: id, Cols: runeArtCols, Mode: artHalfBlock, Patch: s.Version}
+		if s.hasArt(key) {
+			continue
+		}
+		if !s.reserveArt(key) {
+			continue // ya hay una descarga en curso para esta clave
+		}
+		jobs = append(jobs, job{key: key, id: id})
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
+	// Copia de los valores: el Cmd corre en otra goroutine.
+	patch := s.Version
+	_ = patch
+	return func() tea.Msg {
+		out := make(map[artKey]string, len(jobs))
+		defer func() {
+			for _, j := range jobs {
+				s.releaseArt(j.key)
+			}
+		}()
+		for _, j := range jobs {
+			raw, err := rp.RuneIcon(j.id)
+			if err != nil || len(raw) == 0 {
+				continue
+			}
+			img, err := png.Decode(bytes.NewReader(raw))
+			if err != nil {
+				continue
+			}
+			out[j.key] = imgrender.RenderAspect(img, runeArtCols, panelBg)
+		}
+		return artLoadedMsg{Art: out}
+	}
+}
+
+// artLoadedMsg entrega arte descargado al bucle. Sirve tanto para ítems
+// como para runas: la clave incluye qué es.
+type artLoadedMsg struct {
+	Art map[artKey]string
+}
+
+// artCmd lanza la carga asíncrona del arte de la pestaña actual.
+//
+// Cubre las tres pestañas con iconos: Ruta (1), Alt. (2) y Runas (4).
+// Devuelve nil en el resto.
+func (d detailView) artCmd() tea.Cmd {
+	if d.session == nil || d.session.Game != model.GameLoL {
+		return nil
+	}
+	switch d.tab {
+	case 1, 2:
+		return itemArtCmdFor(d.session, tabItemIDs(d.tab, d.lolPlan()), smallArtCols)
+	case 4:
+		return runeArtCmdFor(d.session, runePageIDs(d.CurrentBuild()))
+	}
+	return nil
 }
