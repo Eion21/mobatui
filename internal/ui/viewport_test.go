@@ -745,7 +745,7 @@ func TestDeadlockCardVisualHierarchy(t *testing.T) {
 				{ItemStats: model.ItemStats{ID: 201, Stats: model.Stats{Games: 20000}, AvgBuyS: 650}, WinRate: .55, PickRate: .3, Wilson: .54},
 			}
 			// Missing art must reserve exactly the same space as a real icon.
-			delete(s.ItemArt, 101)
+			s.InvalidateArt()
 			cards := d.cardList()
 			first, second := d.itemCard(0, cards[0]), d.itemCard(1, cards[1])
 			if lipgloss.Height(first) != lipgloss.Height(second) {

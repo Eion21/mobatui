@@ -177,7 +177,7 @@ func (d detailView) handleMouse(mm tea.MouseMsg) detailView {
 			return d
 		}
 	}
-	if d.tab == 0 {
+	if d.tab == 0 || d.tab == 1 || d.tab == 2 {
 		for i := 0; i < len(d.cardList()); i++ {
 			if z := zoneMgr.Get(fmt.Sprintf("card:%d", i)); !z.IsZero() && z.InBounds(mm) {
 				d.itemIdx = i
@@ -248,15 +248,21 @@ func (d detailView) Update(msg tea.Msg) (detailView, tea.Cmd) {
 		d.tab = (d.tab + 1) % len(tabs)
 		d.clampSel()
 		d.vp.GotoTop()
+		d.ensureTabArt()
+		return d, d.artCmd()
 	case "shift+tab":
 		d.tab = (d.tab - 1 + len(tabs)) % len(tabs)
 		d.clampSel()
 		d.vp.GotoTop()
+		d.ensureTabArt()
+		return d, d.artCmd()
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if idx := int(km.String()[0] - '1'); idx < len(tabs) {
 			d.tab = idx
 			d.clampSel()
+			d.ensureTabArt()
 			d.vp.GotoTop()
+			return d, d.artCmd()
 		}
 	case "M":
 		// Estado de misión de BOT (antes/después). Es una preferencia
@@ -304,7 +310,9 @@ func (d detailView) Update(msg tea.Msg) (detailView, tea.Cmd) {
 			d.itemIdx = nCards - 1
 		}
 	case "enter":
-		if d.tab == 0 && nCards > 0 {
+		// Popup de detalle en Ítems y también en Ruta y Alt., que
+		// reutilizan el MISMO popup y la misma selección.
+		if (d.tab == 0 || d.tab == 1 || d.tab == 2) && nCards > 0 {
 			d.showItem = true
 		}
 	case "esc":
@@ -508,6 +516,13 @@ func (d detailView) hybridCards() ([]cardItem, bool) {
 // cardList aplana core+botas para la navegación. Un campeón sin build
 // (rol no canónico) devuelve lista vacía en vez de reventar.
 func (d detailView) cardList() []cardItem {
+	// Ruta y Alt. tienen su propia lista enfocable: reutilizan el mismo
+	// popup y la misma selección, sin un sistema paralelo.
+	if d.session != nil && d.session.Game == model.GameLoL {
+		if d.tab == 1 || d.tab == 2 {
+			return d.tabCardList()
+		}
+	}
 	b := d.CurrentBuild()
 	if b == nil {
 		return nil
@@ -1464,6 +1479,15 @@ func (d detailView) dlRouteHeader() string {
 			header = full
 		}
 	}
+	// Aviso de antigüedad: solo cuando los datos NO son la descarga
+	// fresca de esta consulta. Un hit de caché fresca es lo normal y no
+	// lleva advertencia. Si la fecha se desconoce, no se inventa nada.
+	if stale, extra := routeFreshness(st, time.Now()); stale {
+		header = stalePrefix(st) + header
+		if extra != "" && d.width >= 60 {
+			header += stDim.Render(" · " + extra)
+		}
+	}
 	return stDim.Render(header)
 }
 
@@ -1803,7 +1827,7 @@ func (d detailView) itemCard(idx int, c cardItem) string {
 	delta := (it.WinRate - base) * 100
 	meta := deltaStyle(delta).Render(fmt.Sprintf("%+.1f", delta)) + snowMark(delta) +
 		" " + stDim.Render("p"+pct(it.PickRate))
-	icon := d.session.ItemArt[it.ID]
+	icon := d.session.ItemArtFor(it.ID, 12)
 	if icon == "" {
 		icon = d.fallbackIcon(name)
 	}
@@ -2045,6 +2069,54 @@ func (d detailView) coreTopLine() string {
 
 // ─── pestaña matchups (Deadlock y LoL) ──────────────────────────────
 
+// runeIconInline devuelve el icono compacto de una runa, o "" si no hay
+// arte. No hace peticiones: el arte se preparó al abrir la pestaña.
+//
+// En terminal estrecha se omite para no desplazar el nombre.
+func (d detailView) runeIconInline(id int) string {
+	if id <= 0 {
+		return ""
+	}
+	if d.width > 0 && d.width < 60 {
+		return ""
+	}
+	icon := d.session.RuneArtFor(id, runeArtCols)
+	if icon == "" {
+		return ""
+	}
+	return icon + " "
+}
+
+// routeFreshness decide si una ruta merece aviso de antigüedad.
+//
+// Solo se avisa cuando los datos NO son de esta consulta: cacheados
+// caducados servidos por un error de fuente, o de un respaldo local. Un
+// hit de caché fresca o una descarga nueva son lo normal.
+//
+// Devuelve stale=false si la fecha se desconoce: no se inventa la
+// antigüedad.
+func routeFreshness(st RouteStep, now time.Time) (bool, string) {
+	switch st.DataState {
+	case "stale":
+		if st.DataFetchedAt.IsZero() {
+			return true, ""
+		}
+		return true, "datos de hace " + humanAge(now.Sub(st.DataFetchedAt))
+	case "fixed":
+		return true, "respaldo local"
+	default:
+		return false, ""
+	}
+}
+
+// stalePrefix marca la cabecera cuando la ruta no es fresca.
+func stalePrefix(st RouteStep) string {
+	if st.DataState == "fixed" {
+		return stWinrateBad.Render("Ruta de respaldo · ")
+	}
+	return stWinrateBad.Render("Ruta almacenada · ")
+}
+
 // minMatchupGames filtra cruces sin muestra significativa.
 const minMatchupGames = 200
 
@@ -2121,8 +2193,10 @@ func (d detailView) runesView() string {
 		return stDim.Render("sin runas con muestra suficiente")
 	}
 	p := b.RunePages[0]
+	// La keystone es la runa más identificativa: lleva icono siempre que
+	// exista recurso, y su nombre textual se conserva.
 	head := lipgloss.JoinVertical(lipgloss.Left,
-		stSection.Render("◆ "+d.session.RuneName(p.KeystoneID)),
+		stSection.Render("◆ "+d.runeIconInline(p.KeystoneID)+d.session.RuneName(p.KeystoneID)),
 		stDim.Render(fmt.Sprintf("%s / %s · WR %s · %s partidas",
 			stValue.Render(d.session.TreeName(p.PrimaryTree)),
 			stValue.Render(d.session.TreeName(p.SecondaryTree)),
@@ -2132,7 +2206,7 @@ func (d detailView) runesView() string {
 	bullet := func(ids []int) []string {
 		out := make([]string, 0, len(ids))
 		for _, id := range ids {
-			out = append(out, "• "+d.session.RuneName(id))
+			out = append(out, "• "+d.runeIconInline(id)+d.session.RuneName(id))
 		}
 		return out
 	}

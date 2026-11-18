@@ -39,7 +39,7 @@ func TestAuditUICostMatchesPlan(t *testing.T) {
 	}
 	s := &Session{
 		Game: model.GameDeadlock, Builds: builds,
-		Names: Names{Items: names}, ItemArt: map[int]string{}, ItemMeta: meta,
+		Names: Names{Items: names}, ItemArt: map[artKey]string{}, ItemMeta: meta,
 		Routes:    map[string][]RouteStep{},
 		Champions: groupByChampion(builds, heroes, game.For(model.GameDeadlock).Roles),
 	}

@@ -203,6 +203,9 @@ func (r deadlockRuns) LoadRuns(champKey string) ([]ui.RouteStep, error) {
 	}
 	const minShare = 0.3
 	steps := deadlock.BuildRoute(runs, minShare)
+	// Procedencia de la MUESTRA: se repite en cada paso porque la
+	// antigüedad pertenece a la muestra, no a cada objeto.
+	origin, _ := r.api.RunOriginFor(id)
 	out := make([]ui.RouteStep, 0, len(steps))
 	for _, st := range steps {
 		out = append(out, ui.RouteStep{
@@ -210,9 +213,11 @@ func (r deadlockRuns) LoadRuns(champKey string) ([]ui.RouteStep, error) {
 			SampleSize: len(runs), MinShare: minShare,
 			MedT: st.MedT, MedNet: st.MedNet,
 			PosLo: st.PosLo, PosHi: st.PosHi,
-			UpgradeOf:    st.UpgradeOf,
-			ChainRate:    st.ChainRate,
-			UpgradedRate: st.UpgradedRate,
+			UpgradeOf:     st.UpgradeOf,
+			ChainRate:     st.ChainRate,
+			UpgradedRate:  st.UpgradedRate,
+			DataState:     origin.State,
+			DataFetchedAt: origin.FetchedAt,
 		})
 	}
 	return out, nil
@@ -244,10 +249,15 @@ func (r deadlockRuns) LoadHybrid(champKey string) (*ui.HybridBuildView, error) {
 	if err != nil {
 		return nil, err
 	}
+	// La build híbrida sale de la MISMA muestra que la ruta: comparte su
+	// procedencia para que la UI advierta igual de datos caducados.
+	origin, _ := r.api.RunOriginFor(id)
 	out := &ui.HybridBuildView{
-		Confidence: hb.Confidence,
-		FinalItems: hb.Plan.FinalItems(),
-		Spent:      hb.Plan.Spent,
+		Confidence:    hb.Confidence,
+		FinalItems:    hb.Plan.FinalItems(),
+		Spent:         hb.Plan.Spent,
+		DataState:     origin.State,
+		DataFetchedAt: origin.FetchedAt,
 	}
 	conv := func(entries []deadlock.BuildEntry) []ui.HybridStep {
 		steps := make([]ui.HybridStep, 0, len(entries))

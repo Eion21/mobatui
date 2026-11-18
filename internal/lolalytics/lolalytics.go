@@ -149,7 +149,7 @@ func parseQwik(html []byte) (*qwik, error) {
 		return nil, fmt.Errorf("lolalytics: sin estado qwik/json en la página")
 	}
 	var payload struct {
-		Objs []json.RawMessage `json:"objs"`
+		Objs []any `json:"objs"`
 	}
 	if err := json.Unmarshal(m[1], &payload); err != nil {
 		return nil, fmt.Errorf("lolalytics: estado qwik inválido: %w", err)
@@ -157,15 +157,7 @@ func parseQwik(html []byte) (*qwik, error) {
 	if len(payload.Objs) == 0 {
 		return nil, fmt.Errorf("lolalytics: estado qwik vacío")
 	}
-	q := &qwik{n: len(payload.Objs), objs: make([]any, len(payload.Objs))}
-	for i, raw := range payload.Objs {
-		var v any
-		if err := json.Unmarshal(raw, &v); err != nil {
-			v = nil
-		}
-		q.objs[i] = v
-	}
-	return q, nil
+	return &qwik{n: len(payload.Objs), objs: payload.Objs}, nil
 }
 
 var refRe = regexp.MustCompile(`^[0-9a-z]{1,4}$`)

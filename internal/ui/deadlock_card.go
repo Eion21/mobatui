@@ -87,7 +87,7 @@ func (d detailView) dlItemCard(idx int, c cardItem) string {
 			stValue.Render(truncate(timing, inner)),
 		)
 	} else {
-		icon := d.session.ItemArt[c.item.ID]
+		icon := d.session.ItemArtFor(c.item.ID, 12)
 		if icon == "" {
 			icon = d.fallbackIcon(name)
 		}

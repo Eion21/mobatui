@@ -27,9 +27,20 @@ const (
 )
 
 // Result es la respuesta de Get.
+//
+// FetchedAt es la fecha de LOS DATOS de esta respuesta concreta: la
+// entrada que se ha servido en un hit o stale, o el instante de la
+// descarga en un miss. Es por petición, no global.
+//
+// Antes Result solo llevaba Body y State, así que quien necesitaba la
+// fecha tenía que consultar Cache.Last() —estado compartido— y podía
+// obtener la de otra consulta concurrente.
 type Result struct {
 	Body  []byte
 	State State
+	// FetchedAt es cuándo se obtuvieron estos datos. Zero si se
+	// desconoce (no se inventa una fecha).
+	FetchedAt time.Time
 }
 
 // entry es el envoltorio persistido en disco. El cuerpo vive en un
@@ -153,6 +164,21 @@ func (c *Cache) store(key string, e *entry, body []byte) error {
 	return bf.Close()
 }
 
+// HasEntry indica si existe una entrada en disco para key, esté fresca o
+// caducada. No hace fetch ni modifica el estado: sirve para decidir si
+// un fallo de fuente puede resolverse con stale-if-error.
+func (c *Cache) HasEntry(key string) bool {
+	e, err := c.load(key)
+	if err != nil || e == nil {
+		return false
+	}
+	// La entrada solo es útil si su cuerpo se puede leer.
+	if _, err := c.loadBody(key); err != nil {
+		return false
+	}
+	return true
+}
+
 // Get devuelve el cuerpo asociado a key. Con entrada fresca no llama a
 // fetch; sin entrada o caducada, hace fetch y persiste con ttl. Si el
 // fetch falla y existe entrada caducada, la sirve como StateStale.
@@ -161,14 +187,14 @@ func (c *Cache) Get(key string, ttl time.Duration, fetch func() ([]byte, error))
 	if err == nil && c.timeNow().Before(e.ExpiresAt) {
 		if body, berr := c.loadBody(key); berr == nil {
 			c.report(StateHit, e.FetchedAt)
-			return Result{Body: body, State: StateHit}, nil
+			return Result{Body: body, State: StateHit, FetchedAt: e.FetchedAt}, nil
 		}
 	}
 	if c.Offline {
 		if e != nil {
 			if body, err := c.loadBody(key); err == nil {
 				c.report(StateStale, e.FetchedAt)
-				return Result{Body: body, State: StateStale}, nil
+				return Result{Body: body, State: StateStale, FetchedAt: e.FetchedAt}, nil
 			}
 		}
 		return Result{}, fmt.Errorf("cache: modo offline y sin entrada para %q", key)
@@ -178,7 +204,7 @@ func (c *Cache) Get(key string, ttl time.Duration, fetch func() ([]byte, error))
 		if e != nil {
 			if stale, serr := c.loadBody(key); serr == nil {
 				c.report(StateStale, e.FetchedAt)
-				return Result{Body: stale, State: StateStale}, nil
+				return Result{Body: stale, State: StateStale, FetchedAt: e.FetchedAt}, nil
 			}
 		}
 		return Result{}, fmt.Errorf("cache: fetch de %q fallido y sin caché: %w", key, err)
@@ -193,7 +219,7 @@ func (c *Cache) Get(key string, ttl time.Duration, fetch func() ([]byte, error))
 		_ = err
 	}
 	c.report(StateMiss, now)
-	return Result{Body: body, State: StateMiss}, nil
+	return Result{Body: body, State: StateMiss, FetchedAt: now}, nil
 }
 
 // bodyPath es el archivo del cuerpo gzip de la entrada.

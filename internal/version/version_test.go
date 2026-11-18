@@ -256,3 +256,89 @@ func TestPseudoversionNoSeAnunciaComoRelease(t *testing.T) {
 		t.Errorf("ldflags debía mandar: %s", info.Source)
 	}
 }
+
+// TestInjectedCommitPrioridad: el commit inyectado por ldflags manda
+// sobre vcs.revision, y NO se pierde al devolver la versión inyectada.
+//
+// Regresión real de v0.2.0: la versión publicada anunciaba
+// "commit: (desconocido)" porque resolve devolvía antes de calcular el
+// commit cuando había versión inyectada.
+func TestInjectedCommitPrioridad(t *testing.T) {
+	oldCommit, oldVer := injectedCommit, injected
+	t.Cleanup(func() { injectedCommit, injected = oldCommit, oldVer })
+
+	injectedCommit = "8358d6d4543a3b26ad114ede5052aa1628006ea4"
+	injected = "0.2.1"
+
+	// vcs.revision apunta a otro commit: debe ganar el inyectado.
+	bi := buildInfo{ok: true, version: "(devel)", commit: "aaaaaaaaaaaaaaaaaaaa"}
+	info := resolve(injected, func() buildInfo { return bi })
+
+	if info.Version != "0.2.1" {
+		t.Errorf("versión = %q, se esperaba 0.2.1", info.Version)
+	}
+	if info.Source != SourceInjected {
+		t.Errorf("fuente = %q, se esperaba ldflags", info.Source)
+	}
+	if info.Commit != "8358d6d" {
+		t.Errorf("commit = %q, se esperaba 8358d6d (el inyectado, no vcs.revision)", info.Commit)
+	}
+}
+
+// TestInjectedCommitSinInyeccion: sin ldflags, el commit sale de
+// vcs.revision como antes.
+func TestInjectedCommitSinInyeccion(t *testing.T) {
+	oldCommit, oldVer := injectedCommit, injected
+	t.Cleanup(func() { injectedCommit, injected = oldCommit, oldVer })
+
+	injectedCommit = ""
+	injected = ""
+
+	bi := buildInfo{ok: true, version: "(devel)", commit: "bbbbbbbbbbbbbbbbbbbb"}
+	info := resolve("", func() buildInfo { return bi })
+
+	if info.Commit != "bbbbbbb" {
+		t.Errorf("commit = %q, se esperaba bbbbbbb de vcs.revision", info.Commit)
+	}
+	if info.Source != SourceDev {
+		t.Errorf("fuente = %q", info.Source)
+	}
+}
+
+// TestGoInstallConservaCommit: `go install @vX.Y.Z` mantiene la versión
+// del módulo y el commit que Go incrusta.
+func TestGoInstallConservaCommit(t *testing.T) {
+	oldCommit, oldVer := injectedCommit, injected
+	t.Cleanup(func() { injectedCommit, injected = oldCommit, oldVer })
+
+	injectedCommit = ""
+	injected = ""
+
+	bi := buildInfo{ok: true, version: "v0.2.1", commit: "cccccccccccccccccccc"}
+	info := resolve("", func() buildInfo { return bi })
+
+	if info.Version != "0.2.1" {
+		t.Errorf("versión = %q, se esperaba 0.2.1", info.Version)
+	}
+	if info.Source != SourceModule {
+		t.Errorf("fuente = %q, se esperaba buildinfo", info.Source)
+	}
+	if info.Commit != "ccccccc" {
+		t.Errorf("commit = %q", info.Commit)
+	}
+}
+
+// TestInjectedCommitIncompleto: un valor basura no rompe la resolución.
+func TestInjectedCommitIncompleto(t *testing.T) {
+	oldCommit := injectedCommit
+	t.Cleanup(func() { injectedCommit = oldCommit })
+
+	injectedCommit = "   "
+	info := resolve("1.0.0", func() buildInfo { return buildInfo{} })
+	if info.Commit != "" {
+		t.Errorf("commit = %q, se esperaba vacío", info.Commit)
+	}
+	if info.Version != "1.0.0" {
+		t.Errorf("versión = %q", info.Version)
+	}
+}

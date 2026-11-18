@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Eion21/mobatui/internal/cache"
@@ -50,6 +52,11 @@ type Client struct {
 	locale     string
 	version    string
 	baseURL    string // campo para apuntar a un servidor de pruebas
+
+	// runeIcons cachea id → ruta relativa del icono de runa, resuelta
+	// una sola vez desde runesReforged.json.
+	runeIconsMu sync.Mutex
+	runeIcons   map[int]string
 }
 
 func New(c *cache.Cache, fixtureDir, locale string) *Client {
@@ -188,12 +195,19 @@ func (cl *Client) Items() (map[int]string, error) {
 }
 
 type runesFile []struct {
-	ID    int    `json:"id"`
-	Name  string `json:"name"`
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	// Icon es la ruta RELATIVA del PNG del árbol, p.ej.
+	// "perk-images/Styles/7200_Domination.png".
+	Icon  string `json:"icon"`
 	Slots []struct {
 		Runes []struct {
 			ID   int    `json:"id"`
 			Name string `json:"name"`
+			// Icon es la ruta RELATIVA del PNG de la runa, p.ej.
+			// "perk-images/Styles/Domination/Electrocute/Electrocute.png".
+			// NO sigue el esquema /img/rune/<id>.png.
+			Icon string `json:"icon"`
 		} `json:"runes"`
 	} `json:"slots"`
 }
@@ -235,30 +249,47 @@ type summonerFile struct {
 // Runes devuelve id → nombre de runa (aplanado, incluye keystones) y
 // id → nombre de árbol.
 func (cl *Client) Runes() (runes map[int]string, trees map[int]string, err error) {
+	runes, trees, _, err = cl.RunesWithIcons()
+	return runes, trees, err
+}
+
+// RunesWithIcons devuelve además el mapa id → ruta relativa del icono.
+//
+// El campo `icon` de runesReforged.json es una ruta relativa a
+// /cdn/img/ (SIN versión): los iconos de runa no están versionados en
+// el CDN, a diferencia de ítems y campeones.
+func (cl *Client) RunesWithIcons() (runes map[int]string, trees map[int]string, icons map[int]string, err error) {
 	v, err := cl.Version()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	url := fmt.Sprintf("%s/cdn/%s/data/%s/runesReforged.json", cl.baseURL, v, cl.locale)
 	body, _, err := cl.getURL(url, ttlStatic)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ddragon: runas: %w", err)
+		return nil, nil, nil, fmt.Errorf("ddragon: runas: %w", err)
 	}
 	var f runesFile
 	if err := json.Unmarshal(body, &f); err != nil {
-		return nil, nil, fmt.Errorf("ddragon: runesReforged.json inválido: %w", err)
+		return nil, nil, nil, fmt.Errorf("ddragon: runesReforged.json inválido: %w", err)
 	}
 	runes = map[int]string{}
 	trees = map[int]string{}
+	icons = map[int]string{}
 	for _, tree := range f {
 		trees[tree.ID] = tree.Name
+		if tree.Icon != "" {
+			icons[tree.ID] = tree.Icon
+		}
 		for _, slot := range tree.Slots {
 			for _, r := range slot.Runes {
 				runes[r.ID] = r.Name
+				if r.Icon != "" {
+					icons[r.ID] = r.Icon
+				}
 			}
 		}
 	}
-	return runes, trees, nil
+	return runes, trees, icons, nil
 }
 
 // ChampionIcon descarga (con caché) el icono cuadrado de un campeón.
@@ -270,6 +301,70 @@ func (cl *Client) ChampionIcon(key string) ([]byte, error) {
 	url := fmt.Sprintf("%s/cdn/%s/img/champion/%s.png", cl.baseURL, v, key)
 	body, _, err := cl.getURL(url, ttlIcon)
 	return body, err
+}
+
+// RuneIcon descarga (con caché) el icono de una runa. Data Dragon
+// publica los iconos de runa en /cdn/<ver>/img/rune/<id>.png; si el id
+// no existe, devuelve error y la UI cae al nombre textual.
+func (cl *Client) RuneIcon(id int) ([]byte, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("ddragon: id de runa inválido: %d", id)
+	}
+	// La ruta sale del campo `icon` de runesReforged.json. NO es
+	// /img/rune/<id>.png (esa ruta devuelve 403) ni lleva versión: los
+	// iconos de runa no están versionados en el CDN.
+	icon, err := cl.runeIconPath(id)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/cdn/img/%s", cl.baseURL, icon)
+	body, _, err := cl.getURL(url, ttlIcon)
+	return body, err
+}
+
+// runeIconPath resuelve id → ruta relativa del icono, validándola.
+//
+// Validar la ruta evita construir URLs con "..", esquemas o barras
+// iniciales si el catálogo viniera manipulado.
+func (cl *Client) runeIconPath(id int) (string, error) {
+	cl.runeIconsMu.Lock()
+	icons := cl.runeIcons
+	cl.runeIconsMu.Unlock()
+	if icons == nil {
+		_, _, fetched, err := cl.RunesWithIcons()
+		if err != nil {
+			return "", err
+		}
+		cl.runeIconsMu.Lock()
+		cl.runeIcons = fetched
+		icons = fetched
+		cl.runeIconsMu.Unlock()
+	}
+	icon, ok := icons[id]
+	if !ok || icon == "" {
+		return "", fmt.Errorf("ddragon: runa %d sin icono en el catálogo", id)
+	}
+	if err := validateRelPath(icon); err != nil {
+		return "", fmt.Errorf("ddragon: ruta de icono inválida para la runa %d: %w", id, err)
+	}
+	return icon, nil
+}
+
+// validateRelPath comprueba que la ruta sea relativa y segura.
+func validateRelPath(p string) error {
+	if p == "" {
+		return fmt.Errorf("ruta vacía")
+	}
+	if strings.HasPrefix(p, "/") || strings.Contains(p, "://") {
+		return fmt.Errorf("debe ser relativa")
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("no puede contener ..")
+	}
+	if !strings.HasSuffix(p, ".png") {
+		return fmt.Errorf("debe terminar en .png")
+	}
+	return nil
 }
 
 // ItemIcon descarga (con caché) el icono de un ítem.

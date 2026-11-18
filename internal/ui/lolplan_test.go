@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -1002,5 +1003,138 @@ func TestWaitZoneEsperaLaCondicion(t *testing.T) {
 	// Puede estar ya o llegar en breve; waitZone cubre ambos casos.
 	if !waitZone("tab:3") {
 		t.Fatal("la zona de una pestaña real debía aparecer")
+	}
+}
+
+// ─── procedencia de rutas de Deadlock ─────────────────────────────
+
+// TestAvisoDeAntiguedadEnRuta: una ruta servida de caché caducada se
+// marca como almacenada con su antigüedad; una fresca no lleva aviso.
+func TestAvisoDeAntiguedadEnRuta(t *testing.T) {
+	base := RouteStep{Item: 9000, N: 200, Share: 0.8, SampleSize: 250, MinShare: 0.3}
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	casos := []struct {
+		name  string
+		st    RouteStep
+		stale bool
+		extra string
+	}{
+		{"descarga nueva", RouteStep{DataState: "miss", DataFetchedAt: now}, false, ""},
+		{"caché fresca", RouteStep{DataState: "hit", DataFetchedAt: now}, false, ""},
+		{"caducada 2 días", RouteStep{DataState: "stale", DataFetchedAt: now.Add(-48 * time.Hour)}, true, "2 d"},
+		{"caducada 5 h", RouteStep{DataState: "stale", DataFetchedAt: now.Add(-5 * time.Hour)}, true, "5 h"},
+		{"respaldo local", RouteStep{DataState: "fixed"}, true, "respaldo local"},
+		{"fecha desconocida", RouteStep{DataState: "stale"}, true, ""},
+	}
+	for _, c := range casos {
+		st := base
+		st.DataState = c.st.DataState
+		st.DataFetchedAt = c.st.DataFetchedAt
+		stale, extra := routeFreshness(st, now)
+		if stale != c.stale {
+			t.Errorf("%s: stale=%v, se esperaba %v", c.name, stale, c.stale)
+		}
+		if c.extra != "" && !strings.Contains(extra, c.extra) {
+			t.Errorf("%s: extra=%q, se esperaba contener %q", c.name, extra, c.extra)
+		}
+		if c.extra == "" && extra != "" && c.name != "respaldo local" {
+			t.Errorf("%s: no debía añadir texto: %q", c.name, extra)
+		}
+	}
+}
+
+// TestCabeceraMuestraAntiguedad: la cabecera de la ruta incluye el
+// aviso cuando los datos son caducados, y no lo incluye cuando son
+// frescos.
+func TestCabeceraMuestraAntiguedad(t *testing.T) {
+	d := planDetailView(t, "kaisa", "Kai'Sa", 118, 60)
+	d.session.Game = model.GameDeadlock
+	d.session.Routes = map[string][]RouteStep{
+		d.champ.Key: {{Item: 9000, N: 200, Share: 0.8, SampleSize: 250, MinShare: 0.3,
+			DataState: "stale", DataFetchedAt: time.Now().Add(-48 * time.Hour)}},
+	}
+	if h := stripANSIStr(d.dlRouteHeader()); !strings.Contains(h, "almacenada") {
+		t.Errorf("sin aviso de datos almacenados: %q", h)
+	} else if !strings.Contains(h, "d") {
+		t.Errorf("sin antigüedad: %q", h)
+	}
+
+	// Fresca: presentación de siempre.
+	d.session.Routes[d.champ.Key][0].DataState = "hit"
+	d.session.Routes[d.champ.Key][0].DataFetchedAt = time.Now()
+	if h := stripANSIStr(d.dlRouteHeader()); strings.Contains(h, "almacenada") {
+		t.Errorf("un hit fresco no debe avisar: %q", h)
+	}
+}
+
+// TestRegresionLoLComparteCache: LoL comparte la caché, así que el
+// cambio de contrato no debe alterar su plan ni su ruta.
+func TestRegresionLoLComparteCache(t *testing.T) {
+	for _, key := range []string{"kaisa", "ahri", "malphite", "soraka"} {
+		d := planDetailView(t, key, key, 118, 60)
+		p := d.lolPlan()
+		if p == nil {
+			t.Fatalf("%s: sin plan", key)
+		}
+		if len(p.Steps) == 0 {
+			t.Errorf("%s: sin pasos", key)
+		}
+		if len(p.FinalMain) == 0 {
+			t.Errorf("%s: sin inventario", key)
+		}
+	}
+}
+
+// TestHibridoComparteProcedencia: la build híbrida sale de la MISMA
+// muestra que la ruta, así que ambas deben presentar la misma
+// procedencia: no puede una avisar de datos caducados y la otra no.
+func TestHibridoComparteProcedencia(t *testing.T) {
+	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	st := RouteStep{Item: 9000, N: 200, Share: 0.8, SampleSize: 250, MinShare: 0.3,
+		DataState: "stale", DataFetchedAt: now.Add(-48 * time.Hour)}
+
+	stale, extra := routeFreshness(st, now)
+	if !stale || !strings.Contains(extra, "2 d") {
+		t.Errorf("ruta: stale=%v extra=%q", stale, extra)
+	}
+
+	// El híbrido con la misma procedencia debe dar el mismo veredicto.
+	hb := HybridBuildView{DataState: st.DataState, DataFetchedAt: st.DataFetchedAt}
+	hbStep := RouteStep{DataState: hb.DataState, DataFetchedAt: hb.DataFetchedAt}
+	staleHB, extraHB := routeFreshness(hbStep, now)
+	if staleHB != stale || extraHB != extra {
+		t.Errorf("híbrido incoherente con la ruta: %v/%q vs %v/%q",
+			staleHB, extraHB, stale, extra)
+	}
+}
+
+// TestEstadosDeRutaNoSeConfunden fija la tabla completa de estados: qué
+// lleva advertencia y qué no.
+func TestEstadosDeRutaNoSeConfunden(t *testing.T) {
+	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	base := RouteStep{Item: 1, N: 10, SampleSize: 100, MinShare: 0.3}
+
+	casos := []struct {
+		state   string
+		warn    bool
+		mention string
+	}{
+		{"miss", false, ""},         // ruta nueva: sin advertencia
+		{"hit", false, ""},          // caché fresca: sin advertencia
+		{"stale", true, "hace"},     // caducada: antigüedad
+		{"fixed", true, "respaldo"}, // respaldo local: identificado
+	}
+	for _, c := range casos {
+		st := base
+		st.DataState = c.state
+		st.DataFetchedAt = now.Add(-3 * time.Hour)
+		warn, extra := routeFreshness(st, now)
+		if warn != c.warn {
+			t.Errorf("%s: warn=%v, se esperaba %v", c.state, warn, c.warn)
+		}
+		if c.mention != "" && !strings.Contains(extra, c.mention) {
+			t.Errorf("%s: extra=%q, se esperaba contener %q", c.state, extra, c.mention)
+		}
 	}
 }
