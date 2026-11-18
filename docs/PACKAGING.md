@@ -348,7 +348,8 @@ de la release antes y después.
 |---|---|---|
 | **No modifica la GitHub Release** | `permissions: contents: read`; no hay `contents: write` en ningún paso | Inventario de assets antes/después: **idéntico** |
 | **No reemplaza binarios ni checksums** | `release.disable: true` en la config + `Assert release unchanged` compara assets y `checksums.txt` | `checksums.txt` antes/después: **idéntico** |
-| **Se publica lo verificado** | Ambas fases usan **el mismo** archivo de config; solo cambia `SKIP_PACKAGE_UPLOAD` | `diff` generado vs publicado: **idéntico byte a byte** |
+| **Se publica lo verificado** | Mismo archivo de config en ambas fases + `mod_timestamp` y `-trimpath`; el paso `Assert published manifests equal verified ones` compara los sha256 | `diff` generado vs publicado: **idéntico byte a byte** |
+| **Se usa el TAG solicitado** | `actions/checkout` con `ref: refs/tags/${{ inputs.tag }}`; se compara `HEAD` con `git rev-parse refs/tags/X^{commit}` | 6 pruebas de regresión en `cmd/pkgcheck/tag_test.go` |
 | **No crea tags** | No hay `git tag`, ni `push`, ni acción que los cree | `git tag` y la API de tags: **sin cambios** |
 | **No publica manifiestos incompletos** | `pkgcheck` exige que cada URL sea un asset real y que su SHA-256 coincida con el publicado | ZIP local no publicado → **rechazado** |
 | **Solo escribe en repositorios autorizados** | Un token por repositorio; `Report destinations` deja el destino en el log | 3 destinos declarados, ninguno más |
@@ -652,3 +653,119 @@ duplicar**. Es un fallo controlado, no corrupción.
 
 **No existe rollback automático.** Si un manifiesto quedó mal, se corrige
 con otro commit en ese repositorio.
+
+---
+
+## 14. Equivalencia entre lo verificado y lo publicado
+
+### El problema
+
+GoReleaser **no tiene** un subcomando para publicar manifiestos ya
+generados. `publishAll` recorre `ctx.Artifacts`, que vive en memoria, y
+`artifacts.json` **se escribe pero nunca se relee** (verificado en el
+código de v2.19.0). Por tanto la fase de publicación **regenera** los
+manifiestos.
+
+Consecuencia: los archivos que se verifican en la fase 2 no son, en
+sentido estricto, los mismos objetos que se escriben en la fase 3.
+
+### Por qué no se reemplaza GoReleaser
+
+La alternativa sería un script propio que ejecute `git clone`, copie el
+`.rb`/`.json` ya verificado y haga `commit`+`push`. Eso significaría:
+
+- Reimplementar la autenticación por token y por clave SSH.
+- Reimplementar la lógica de `skip_upload`, prerelease y rama.
+- Reimplementar el PR de WinGet contra `microsoft/winget-pkgs`.
+- Mantener todo eso frente a cambios de GoReleaser.
+
+Es más código propio, más superficie de error y más mantenimiento, para
+resolver un problema que ya está acotado. **No se amplía el alcance.**
+
+### Qué se hace en su lugar
+
+1. **Misma configuración en las dos fases.** Solo cambia
+   `SKIP_PACKAGE_UPLOAD`. Así no hay dos archivos que puedan divergir en
+   `url_template`, `directory` o `skip_upload`.
+2. **Determinismo de la generación.** `mod_timestamp: {{ .CommitTimestamp }}`
+   fija la fecha de los archivos empaquetados y `-trimpath` elimina rutas
+   absolutas. Sin ellos, el SHA cambiaba entre ejecuciones.
+3. **Comprobación en tiempo de ejecución.** El paso
+   `Assert published manifests equal verified ones` calcula el sha256 de
+   los manifiestos antes y después de publicar y **falla si difieren**.
+
+### El límite, dicho sin ambigüedad
+
+Esto es **determinismo empírico, no una garantía por construcción**. Se
+apoya en tres cosas verificadas:
+
+- Los manifiestos no contienen ningún campo dependiente de la hora
+  (revisado: no hay `time.Now` en los pipes de cask, scoop ni winget).
+- Con la misma versión y los mismos artefactos, dos ejecuciones producen
+  bytes idénticos (verificado: `f920c00d…` y `580c5666…` en ambas fases).
+- Si algo cambiara, la comprobación de sha256 lo detecta y el job falla
+  **después** de publicar, dejando el error visible.
+
+**Riesgo residual:** la comprobación detecta la divergencia, no la
+previene. Si los manifiestos difirieran, la publicación ya habría
+ocurrido. Se mitiga con:
+
+- El determinismo de arriba (probado).
+- Los tokens son de alcance mínimo y la escritura es un commit en un tap.
+- La recuperación es un commit de corrección en ese repositorio.
+
+Se acepta este riesgo porque la alternativa —sustituir el sistema de
+publicación de GoReleaser— introduce más riesgo del que elimina.
+
+---
+
+## 15. Checkout del tag en el workflow de publicación
+
+**Bug corregido:** `actions/checkout` sin `ref` toma el ref del evento.
+En un `workflow_dispatch` eso es **el master del momento**, no el tag
+solicitado. Publicar manifiestos para `v0.2.1` generaba el binario desde
+el código de master: el SHA del artefacto no era el del tag y el
+manifiesto habría apuntado a un binario distinto del publicado.
+
+### Corrección
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    ref: refs/tags/${{ inputs.tag }}
+    fetch-depth: 0
+```
+
+Y una verificación explícita antes de generar nada:
+
+```bash
+git rev-parse -q --verify "refs/tags/$TAG"          # existe
+HEAD_SHA=$(git rev-parse HEAD)
+TAG_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")  # desreferencia anotados
+test "$HEAD_SHA" = "$TAG_SHA"                       # coinciden
+```
+
+El `^{commit}` es imprescindible: los tags son **anotados**, así que el
+SHA del objeto tag **no** es el del commit. Sin desreferenciar, la
+comparación fallaría siempre y el workflow no publicaría nunca.
+
+También se comprueba que el commit que anuncia la release coincide, y se
+valida el formato con `^v[0-9]+\.[0-9]+\.[0-9]+$` (un patrón laxo como
+`v[0-9]*` aceptaría `v1.2`, que luego fallaría de forma confusa).
+
+### Prueba de regresión
+
+`cmd/pkgcheck/tag_test.go`, 6 pruebas que se ejecutan con
+`-tags packages` y no necesitan red:
+
+| Prueba | Qué fija |
+|---|---|
+| `TestTagNoEsHead` | Con HEAD distinto del tag, la comparación falla |
+| `TestTagInexistente` | Un tag que no existe falla, no cae en HEAD |
+| `TestTagAnotadoSeDesreferencia` | `^{commit}` da el commit, no el objeto tag |
+| `TestCheckoutConRefDeTag` | `checkout refs/tags/X` deja HEAD en el tag |
+| `TestFormatoDeTag` | `v1.2`, `latest`, `vabc` se rechazan |
+| `TestWorkflowFijaElRef` | El YAML contiene el `ref` y la comprobación |
+
+La última es una prueba sobre el propio workflow: si alguien quita el
+`ref`, el test falla en CI.

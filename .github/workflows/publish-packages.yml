@@ -13,14 +13,22 @@ name: Publish packages
 #   3. Publicar   MISMA config, SKIP_PACKAGE_UPLOAD=false, --fail-fast
 #   4. Comprobar  la GitHub Release no cambió
 #
-# POR QUÉ UN SOLO ARCHIVO DE CONFIGURACIÓN
+# EQUIVALENCIA ENTRE LO VERIFICADO Y LO PUBLICADO
 #
-#   La fase 3 no reutiliza los manifiestos de la fase 1: GoReleaser los
-#   regenera al ejecutarse de nuevo (no hay subcomando para publicar
-#   archivos ya generados). Para que lo publicado sea exactamente lo
-#   verificado, ambas fases usan EL MISMO archivo y solo cambia
-#   SKIP_PACKAGE_UPLOAD. Así la equivalencia es por construcción, no por
-#   reproducibilidad observada. Verificado: sha256 idénticos.
+#   La fase 3 NO reutiliza los manifiestos de la fase 1: GoReleaser los
+#   regenera al ejecutarse de nuevo. No existe un subcomando para
+#   publicar artefactos ya generados (artifacts.json se escribe pero
+#   nunca se relee; publishAll filtra ctx.Artifacts en memoria).
+#
+#   Ambas fases usan EL MISMO archivo de configuración y solo cambia
+#   SKIP_PACKAGE_UPLOAD, así que la generación es determinista: mismos
+#   inputs, misma versión, mismos artefactos. La reproducibilidad se
+#   apoya en mod_timestamp y -trimpath (en .goreleaser-publish.yaml).
+#
+#   LIMITE: esto es determinismo empírico, no una garantía por
+#   construcción. Por eso el paso "Assert published manifests equal
+#   verified ones" compara los sha256 en tiempo de ejecución y falla si
+#   difieren.
 #
 # POR QUÉ --skip=publish NO SE USA EN LA FASE 3
 #
@@ -65,8 +73,16 @@ jobs:
   manifests:
     runs-on: ubuntu-latest
     steps:
+      # Checkout del TAG solicitado, no del ref por defecto.
+      #
+      # Sin 'ref', actions/checkout toma el ref del evento: en un
+      # workflow_dispatch eso es el master del momento. Si se publicaban
+      # manifiestos para v0.2.1, se generaban desde el código de master, y
+      # el binario resultante no era el del tag. Aquí se fija el ref y se
+      # verifica que HEAD sea exactamente el commit del tag.
       - uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
@@ -76,20 +92,54 @@ jobs:
       # ---------------------------------------------------------------
       # 0. Validaciones previas
       # ---------------------------------------------------------------
-      - name: Verify tag exists and is published
+      # Verifica, en este orden:
+      #   1. El tag tiene formato vX.Y.Z.
+      #   2. HEAD es EXACTAMENTE el commit de ese tag (no master).
+      #   3. La GitHub Release existe y no es borrador.
+      #   4. El commit del tag coincide con el que anuncia la release.
+      - name: Verify tag exists and matches HEAD
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          case "$TAG" in
-            v[0-9]*) : ;;
-            *) echo "::error::el tag '$TAG' no tiene el formato vX.Y.Z"; exit 1 ;;
-          esac
+          # vX.Y.Z exacto: 'v1.2' o 'v1' colarían con un patrón laxo y
+          # luego fallarían de forma confusa al no existir la release.
+          if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::el tag '$TAG' no tiene el formato vX.Y.Z"
+            exit 1
+          fi
+
+          # El tag debe existir en el clon. actions/checkout con ref de tag
+          # crea un HEAD desacoplado, así que se compara por SHA.
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null \
+            || { echo "::error::el tag $TAG no existe en el repositorio"; exit 1; }
+
+          HEAD_SHA=$(git rev-parse HEAD)
+          TAG_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
+          echo "HEAD:      $HEAD_SHA"
+          echo "tag $TAG:  $TAG_SHA"
+          test "$HEAD_SHA" = "$TAG_SHA" || {
+            echo "::error::HEAD ($HEAD_SHA) no es el commit del tag $TAG ($TAG_SHA)."
+            echo "::error::Se publicarían manifiestos generados desde otro commit."
+            exit 1
+          }
+
+          # La release no puede ser un borrador.
           gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets \
             --jq '"tag=\(.tagName) draft=\(.isDraft) prerelease=\(.isPrerelease) assets=\(.assets|length)"'
           DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
           test "$DRAFT" = "false" || { echo "::error::la release $TAG es un borrador"; exit 1; }
+
+          # El commit de la release debe ser el del tag.
+          REL_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.sha')
+          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${REL_SHA}"                    --jq '.object.sha' 2>/dev/null)" = "$TAG_SHA" ] 2>/dev/null; then
+            echo "etiqueta anotada: $REL_SHA -> $TAG_SHA"
+          elif [ "$REL_SHA" != "$TAG_SHA" ]; then
+            echo "::error::la release $TAG apunta a $REL_SHA, pero el tag resuelve a $TAG_SHA"
+            exit 1
+          fi
+          echo "tag y HEAD coinciden en $TAG_SHA"
 
       - name: Snapshot release state (before)
         env:
@@ -183,6 +233,19 @@ jobs:
           go run -tags packages ./cmd/pkgcheck \
             -tag "$TAG" -dist dist -repo "$GITHUB_REPOSITORY"
 
+      # Guarda los hashes de lo verificado para compararlos con lo que la
+      # fase 3 genere y publique.
+      - name: Record verified manifest hashes
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/verified
+          sha256sum dist/scoop/bucket/mobatui.json \
+                    dist/homebrew/Casks/mobatui.rb \
+                    dist/winget/manifests/*/*/*/*/*.yaml \
+            | sed 's|dist/||' | sort > /tmp/verified/hashes.txt
+          echo "manifiestos verificados:"
+          cat /tmp/verified/hashes.txt
+
       # Sobre VERIFICAR: si pkgcheck falla, el workflow se detiene AQUÍ y
       # el paso de publicación nunca se ejecuta. Ningún repositorio externo
       # recibe nada.
@@ -240,6 +303,30 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+
+      # ---------------------------------------------------------------
+      # 3b. EQUIVALENCIA — la fase 3 REGENERA los manifiestos (GoReleaser
+      # no tiene un subcomando para publicar artefactos ya generados:
+      # artifacts.json se escribe pero nunca se relee). Por tanto la
+      # equivalencia NO es por construcción: se comprueba aquí.
+      #
+      # Se fija mod_timestamp y -trimpath para que la generación sea
+      # determinista, y este paso verifica que coincide con lo validado.
+      # Si difieren, el job falla aunque la publicación haya funcionado.
+      # ---------------------------------------------------------------
+      - name: Assert published manifests equal verified ones
+        run: |
+          set -euo pipefail
+          sha256sum dist/scoop/bucket/mobatui.json \
+                    dist/homebrew/Casks/mobatui.rb \
+                    dist/winget/manifests/*/*/*/*/*.yaml \
+            | sed 's|dist/||' | sort > /tmp/verified/after.txt
+          if ! diff -u /tmp/verified/hashes.txt /tmp/verified/after.txt; then
+            echo "::error::los manifiestos publicados NO coinciden con los verificados"
+            echo "::error::revisa los cambios de configuración entre fases"
+            exit 1
+          fi
+          echo "manifiestos publicados == verificados (sha256 idénticos)"
 
       # ---------------------------------------------------------------
       # 4. COMPROBAR — la GitHub Release es idéntica.
