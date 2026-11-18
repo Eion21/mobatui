@@ -945,8 +945,13 @@ func TestParcheVsIDAusente(t *testing.T) {
 	if plan.MissingIDs == 0 {
 		t.Error("debe contar los ids ausentes")
 	}
-	if plan.Reason == "" || !contains(plan.Reason, "parche incompatible") {
+	if plan.Reason == "" || !contains(plan.Reason, "incompatible") {
 		t.Errorf("motivo = %q", plan.Reason)
+	}
+	// El motivo nombra el parche de los DATOS, no el del catálogo: son
+	// identidades distintas y el mensaje no debe confundirlas.
+	if !contains(plan.Reason, "99.99") {
+		t.Errorf("el motivo no cita el parche de los datos: %q", plan.Reason)
 	}
 
 	// (b) Un solo id ausente: no es un parche incompatible.
@@ -1136,6 +1141,52 @@ func TestTopeDeterminista(t *testing.T) {
 				t.Errorf("grupo %s ítem %d: %d vs %d", a.Alternatives[i].Category, j,
 					a.Alternatives[i].Items[j].Item, b.Alternatives[i].Items[j].Item)
 			}
+		}
+	}
+}
+
+// TestDiferenciaDeParcheNoEsIncompatibilidad: que el parche de las
+// estadísticas y el del catálogo sean de series distintas es NORMAL
+// (16.22 vs 16.23.1). No puede marcar el plan como incompatible ni
+// cambiar ninguna decisión: el planificador no compara parches.
+func TestDiferenciaDeParcheNoEsIncompatibilidad(t *testing.T) {
+	f := fixture(t, "kaisa")
+	cat := catalog(t)
+
+	// Mismo fixture con parches distintos: las decisiones deben ser
+	// idénticas, porque el parche solo se PROPAGA, no se compara.
+	var planes []Plan
+	for _, patch := range []string{"16.22", "16.23.1", "99.99"} {
+		cb := toCleanBuild(f)
+		cb.Patch = patch
+		planes = append(planes, BuildPlan(cb, cat, Options{}))
+	}
+	base := planes[0]
+	if base.PatchMismatch {
+		t.Fatal("una diferencia de parche no es incompatibilidad")
+	}
+	if len(base.Steps) == 0 {
+		t.Fatal("debía construir pasos")
+	}
+	for i, p := range planes[1:] {
+		if p.PatchMismatch {
+			t.Errorf("parche %q marcado como incompatible", p.Patch)
+		}
+		if len(p.Steps) != len(base.Steps) {
+			t.Errorf("parche %q: %d pasos vs %d", p.Patch, len(p.Steps), len(base.Steps))
+		}
+		for j := range p.Steps {
+			if p.Steps[j].Item != base.Steps[j].Item {
+				t.Errorf("parche %q paso %d: %d vs %d",
+					p.Patch, j+1, p.Steps[j].Item, base.Steps[j].Item)
+			}
+		}
+		if len(p.Final) != len(base.Final) {
+			t.Errorf("parche %q: inventario distinto", p.Patch)
+		}
+		// El parche se propaga tal cual: es procedencia, no una clave.
+		if p.Patch != planes[i+1].Patch {
+			t.Errorf("el parche no se propagó: %q", p.Patch)
 		}
 	}
 }

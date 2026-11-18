@@ -620,9 +620,12 @@ func finalInventory(p Plan, catalog map[int]lolitems.Item) (all, main []int) {
 // completeness decide si el plan cubre el inventario esperado.
 func completeness(p Plan) (bool, string) {
 	if p.PatchMismatch {
+		// NINGÚN id de la fuente existe en el catálogo: es el único caso
+		// en que se afirma incompatibilidad. Un hueco suelto no lo es.
 		return false, fmt.Sprintf(
-			"parche incompatible: ninguno de los %d objetos con muestra de la fuente "+
-				"existe en el catálogo de Data Dragon (%s)",
+			"catálogo incompatible: ninguno de los %d objetos con muestra de la fuente "+
+				"existe en el catálogo de Data Dragon (datos del parche %s). "+
+				"Puede ser un catálogo de otro parche o una fuente caída",
 			p.MissingIDs, p.Patch)
 	}
 	if len(p.Steps) == 0 {

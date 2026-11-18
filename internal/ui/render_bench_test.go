@@ -137,3 +137,39 @@ func BenchmarkCandidatosRender(b *testing.B) {
 		_ = d.routeViewA(plan)
 	}
 }
+
+// BenchmarkEtiquetaIncertidumbre mide calcular la etiqueta de muestra y
+// la banda de Wilson. Es aritmética pura sobre un entero ya disponible:
+// no debe añadir una allocación por frame ni tocar la red.
+func BenchmarkEtiquetaIncertidumbre(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = sampleSuffix(148)
+	}
+}
+
+// BenchmarkBandaWilson mide el cálculo del intervalo, que solo se hace
+// al abrir el popup (nunca por paso de la ruta).
+func BenchmarkBandaWilson(b *testing.B) {
+	st := fmtStats{Games: 148, Wins: 102}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = wilsonBand(st)
+	}
+}
+
+// BenchmarkRenderRutaConEtiquetas mide la Ruta completa de Briar, que
+// incluye pasos con muestra limitada (a diferencia de Kai'Sa).
+func BenchmarkRenderRutaConEtiquetas(b *testing.B) {
+	d := planDetailView(b, "briar", "Briar", 118, 60)
+	d.tab = 1
+	d.ensureTabArt()
+	plan := d.lolPlan()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = d.routeViewA(plan)
+	}
+}

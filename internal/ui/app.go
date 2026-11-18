@@ -1521,19 +1521,23 @@ func (a App) footer() string {
 }
 
 // statusLine resume el origen de los datos de la sesión.
+//
+// El parche del pie es el del CATÁLOGO (Session.Version): el resto de la
+// línea describe lo que la aplicación tiene cargado (campeones, builds).
+// El parche de las estadísticas vive en la cabecera del detalle. Antes
+// ambos números aparecían sin etiqueta y parecían contradecirse.
 func statusLine(s *Session) string {
 	src := "fixtures"
 	if len(s.Builds) > 0 && s.Builds[0].Source != "" {
 		src = s.Builds[0].Source
 	}
-	patch := s.Version
-	if patch == "" {
-		patch = "—"
-	}
 	who := "campeones"
 	if s.Game == model.GameDeadlock {
 		who = "héroes"
 	}
+	// En el pie no hay ancho disponible: se usa la etiqueta corta de
+	// catálogo y se mantienen los dos recuentos, que son el dato útil.
+	patch := footerPatchLabel(patchProvenance{CatalogPatch: s.Version}, false)
 	line := fmt.Sprintf("%s · %s · %d %s · %d builds", src, patch, len(s.Champions), who, len(s.Builds))
 	line += freshnessNote(s)
 	if s.Omitted > 0 {

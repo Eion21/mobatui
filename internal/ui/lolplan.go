@@ -156,8 +156,12 @@ func (d detailView) routeViewA(plan *lolbuild.Plan) []string {
 		} else {
 			line = fmt.Sprintf("  botas: %s", stKeyName.Render(b.Name))
 		}
-		line += stDim.Render(fmt.Sprintf(" · %s partidas · %s",
-			nThousand(b.Stats.Games), pct(model.Stats.WinRate(b.Stats))))
+		// La etiqueta de muestra va DENTRO del mismo Render: dos
+		// llamadas a Render por línea añadían una allocación por paso
+		// sin cambiar el resultado visible.
+		line += stDim.Render(fmt.Sprintf(" · %s partidas · %s%s",
+			nThousand(b.Stats.Games), pct(model.Stats.WinRate(b.Stats)),
+			sampleSuffix(b.Stats.Games)))
 		// Las botas son la última fila de tabCardList: misma zona que
 		// las compras para que el clic y el teclado la alcancen.
 		out = append(out, zoneMgr.Mark(fmt.Sprintf("card:%d", len(plan.Steps)), line))
@@ -216,8 +220,9 @@ func (d detailView) routeStepLine(st lolbuild.Step) string {
 	if st.BuyMinute > 0 {
 		line += stDim.Render(fmt.Sprintf(" · ~%d min", st.BuyMinute))
 	}
-	line += stDim.Render(fmt.Sprintf(" · %s partidas · %s",
-		nThousand(st.Stats.Games), pct(model.Stats.WinRate(st.Stats))))
+	line += stDim.Render(fmt.Sprintf(" · %s partidas · %s%s",
+		nThousand(st.Stats.Games), pct(model.Stats.WinRate(st.Stats)),
+		sampleSuffix(st.Stats.Games)))
 	if st.Boots {
 		line += stDim.Render(" · botas")
 	}
@@ -314,7 +319,9 @@ func (d detailView) candidateLines(plan *lolbuild.Plan) []string {
 		if c.PickRate > 0 {
 			line += stDim.Render(fmt.Sprintf(" · pick %.0f%%", c.PickRate))
 		}
-		if c.WinRate > 0 {
+		if label := sampleSuffix(c.Stats.Games); label != "" {
+			line += stDim.Render(fmt.Sprintf(" · WR %s%s", pct(c.WinRate), label))
+		} else if c.WinRate > 0 {
 			line += stDim.Render(fmt.Sprintf(" · WR %s", pct(c.WinRate)))
 		}
 		out = append(out, line)
@@ -414,7 +421,10 @@ func (d detailView) alternativeLine(a lolbuild.Alternative) string {
 	line += stDim.Render(fmt.Sprintf(" · %s partidas", nThousand(a.Stats.Games)))
 	line += stDim.Render(fmt.Sprintf(" · pick %.0f%%", a.PickRate))
 	if a.WinRate > 0 {
-		line += stWinrateGood.Render(fmt.Sprintf(" · WR %s", pct(a.WinRate)))
+		line += stWinrateGood.Render(fmt.Sprintf(" · WR %s%s", pct(a.WinRate),
+			sampleSuffix(a.Stats.Games)))
+	} else {
+		line += stDim.Render(sampleSuffix(a.Stats.Games))
 	}
 	return line
 }

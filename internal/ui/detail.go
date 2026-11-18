@@ -991,14 +991,14 @@ func (d detailView) scrolled() bool {
 }
 
 // compactHeader es la cabecera de una línea para terminales muy bajas:
-// nombre y, si cabe, el parche. Sin retrato ni tendencia.
+// nombre y, si cabe, el parche de DATOS. Sin retrato ni tendencia.
 func (d detailView) compactHeader() string {
 	b := d.CurrentBuild()
 	name := stTitle.Render(d.champ.Name)
 	if b == nil {
 		return name
 	}
-	rest := stDim.Render(" · " + b.Patch)
+	rest := stDim.Render(" · " + compactPatch(b.Patch))
 	if lipgloss.Width(name)+lipgloss.Width(rest) > d.width-2 {
 		return name
 	}
@@ -1025,8 +1025,14 @@ func (d detailView) headerView() string {
 	} else {
 		// El separador final solo se dibuja si hay prioridad de
 		// habilidades: sin ella quedaba un "·" colgando al final.
+		// El parche de la cabecera es el de los DATOS (estadísticas de
+		// partidas), no el del catálogo: las cifras de esta línea salen
+		// de ahí. Si difiere del catálogo se dice explícitamente, para
+		// que no parezca una contradicción con el pie.
+		prov := d.provenance()
 		parts := []string{
-			stDim.Render("Patch " + b.Patch + " · " + nThousand(b.Total.Games) + " partidas · "),
+			stDim.Render(headerPatchLabel(prov, d.width >= 100) + " · " +
+				nThousand(b.Total.Games) + " partidas · "),
 			wrStyle(b.WinRate, b.Total.Games).Render("WR " + pct(b.WinRate)),
 		}
 		if prio := d.priorityLine(); prio != "" {
@@ -1878,9 +1884,16 @@ func wrapName(s string, w int) []string {
 	return []string{first, truncate(strings.Join(words[i:], " "), w)}
 }
 
-// deltaAviso es el delta de WR (puntos) desde el que un ítem huele a
-// sesgo de bola de nieve: con un WR muy por encima del campeón, la
-// muestra viene mayormente de partidas yendo por delante.
+// deltaAviso es el delta de WR (puntos) desde el que un ítem se señala
+// como sospechoso de sesgo de selección.
+//
+// Qué mide de verdad: que el WR del objeto supera al del campeón en 10
+// puntos o más. Eso es todo. NO demuestra que la muestra venga de
+// partidas "yendo por delante", ni que comprar el objeto cause el
+// aumento: un objeto caro y defensivo se compra sobre todo cuando la
+// partida ya va ganada, y el WR agregado recoge esa circunstancia sin
+// poder separarla del efecto propio. El umbral es solo un disparador de
+// aviso, no una prueba (ver biasWarning en uncertainty.go).
 const deltaAviso = 10.0
 
 // snowMark marca con ⚠ los ítems con WR muy por encima del campeón.
@@ -1977,10 +1990,14 @@ func (d detailView) selectionLine() string {
 		stDim.Render(pct(c.item.PickRate)),
 		stDim.Render(nThousand(c.item.Games)))
 	if delta := (c.item.WinRate - d.CurrentBuild().WinRate) * 100; delta >= deltaAviso {
-		line += stDim.Render("  · ⚠ se compra yendo por delante")
+		// Aviso prudente: los datos agregados muestran un WR alto frente
+		// al campeón, pero no prueban CÓMO se compró el objeto. La frase
+		// anterior ("se compra yendo por delante") afirmaba un
+		// comportamiento que la muestra no demuestra.
+		line += stDim.Render("  · " + biasWarning(delta))
 	}
-	if c.item.Games < lowSampleGames {
-		line += stDim.Render("  (muestra baja)")
+	if label := sampleLabel(c.item.Games); label != "" {
+		line += stDim.Render("  (" + label + ")")
 	}
 	return line
 }
@@ -2484,23 +2501,46 @@ func (d detailView) itemPopup() string {
 		tag += stDim.Render(fmt.Sprintf(" · ↗ %d%% la mejoran", int(c.upgradedRate*100+0.5)))
 	}
 	b := d.CurrentBuild()
+	// El WR va con su banda de Wilson, y la banda se explica aparte:
+	// es error de MUESTREO, no una probabilidad de ganar comprando el
+	// objeto ni una corrección del sesgo de selección.
+	wilson := ""
+	if band := wilsonBand(fmtStats{Games: it.Games, Wins: it.Wins}); band != "" {
+		wilson = fmt.Sprintf("  (Wilson 95%%: %s)", band)
+	}
 	lines := []string{
 		name + tag,
 		"",
-		fmt.Sprintf("  WR        %s   (límite Wilson 95%%: %s)",
-			wrStyle(it.WinRate, it.Games).Render(pct(it.WinRate)),
-			wrStyle(it.Wilson, it.Games).Render(pct(it.Wilson))),
+		fmt.Sprintf("  WR        %s%s",
+			wrStyle(it.WinRate, it.Games).Render(pct(it.WinRate)), wilson),
 		fmt.Sprintf("  pick      %s", stDim.Render(pct(it.PickRate))),
-		fmt.Sprintf("  muestra   %s partidas", stDim.Render(nThousand(it.Games))),
+		fmt.Sprintf("  muestra   %s partidas · evidencia %s",
+			stDim.Render(nThousand(it.Games)),
+			stDim.Render(evidenceWord(it.Games))),
 		"",
-		stDim.Render(fmt.Sprintf("  build: %s · %s · patch %s · fuente %s",
-			d.champ.Name, b.Role, b.Patch, b.Source)),
+	}
+	// Procedencia en dos líneas: separa el contexto (campeón/rol/fuente)
+	// de las dos identidades de parche, que es lo que el jugador necesita
+	// distinguir.
+	for _, l := range provenanceLines(d.provenance(), string(b.Role), b.Source, d.champ.Name) {
+		lines = append(lines, stDim.Render(l))
+	}
+	// Explicación de la banda y del tramo de muestra: solo cuando hay
+	// algo que explicar (sin muestra no hay banda que matizar).
+	if wilson != "" {
+		lines = append(lines, "", stDim.Render("  "+wilsonCaveat()))
+	}
+	if explain := uncertaintyExplanation(it.Games); explain != "" {
+		lines = append(lines, stDim.Render("  "+explain))
 	}
 	if d.session.Game == model.GameDeadlock {
 		delta := (it.WinRate - b.WinRate) * 100
 		lines = append(lines, fmt.Sprintf("  Δ WR      %+.1f puntos vs. héroe", delta))
 		if delta >= deltaAviso {
-			lines = append(lines, "  ⚠ se compra yendo por delante")
+			// Advertencia breve arriba y explicación abajo: el popup es
+			// el sitio donde cabe decir que el dato NO es causal.
+			lines = append(lines, stDim.Render("  "+biasWarning(delta)))
+			lines = append(lines, stDim.Render("  "+biasExplanation()))
 		}
 	}
 	// Ruta de compra: orden, posición en la secuencia y patrimonio
@@ -2554,9 +2594,6 @@ func (d detailView) itemPopup() string {
 					stValue.Render(info.Description)),
 			}, lines[6:]...)...)
 		}
-	}
-	if it.Games < lowSampleGames {
-		lines = append(lines, "", stWinrateBad.Render("  ⚠ muestra baja: el WR puede no ser fiable"))
 	}
 	lines = append(lines, "", stDim.Render("esc cierra"))
 	boxW := min(56, max(30, d.width-6))
