@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"testing"
 
+	"github.com/Eion21/mobatui/internal/cache"
 	"github.com/Eion21/mobatui/internal/ddragon"
 	"github.com/Eion21/mobatui/internal/model"
 	"github.com/Eion21/mobatui/internal/staticdata"
@@ -655,4 +656,67 @@ type contadorProvider struct {
 func (c *contadorProvider) ItemIcon(int) ([]byte, error) {
 	c.n++
 	return nil, c.err
+}
+
+// ─── identidad del recurso: tipo de arte y origen ───────────────────
+
+// Test404DeItemNoBloqueaLaRuna: artFailed es un mapa único para ítems y
+// runas, y sus IDs viven en espacios distintos pero pueden coincidir
+// numéricamente (p.ej. 8000). Sin Kind en la identidad, un 404 de ítem
+// dejaba sin icono a la runa del mismo id.
+func Test404DeItemNoBloqueaLaRuna(t *testing.T) {
+	s := &Session{Game: model.GameLoL, ItemArt: map[artKey]string{},
+		RuneArt: map[artKey]string{}, ChampionArt: map[string]champArt{},
+		Version: "16.21"}
+
+	item := artKey{Kind: artItem, ID: 8000, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}
+	runa := artKey{Kind: artRune, ID: 8000, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}
+
+	s.markArtFailed(item, artFailMissing)
+	if !s.artDidFail(item) {
+		t.Fatal("el 404 del ítem debe constar")
+	}
+	if s.artDidFail(runa) {
+		t.Error("la runa con el mismo id no debe heredar el fallo del ítem")
+	}
+
+	// Y al revés.
+	s2 := &Session{Game: model.GameLoL, ItemArt: map[artKey]string{},
+		RuneArt: map[artKey]string{}, ChampionArt: map[string]champArt{},
+		Version: "16.21"}
+	s2.markArtFailed(runa, artFailMissing)
+	if s2.artDidFail(item) {
+		t.Error("el ítem no debe heredar el fallo de la runa")
+	}
+}
+
+// TestOrigenDistingueInstanciasDelMismoTipo: dos clientes ddragon con
+// distinto baseURL son orígenes distintos. Indexar por tipo (%T) hacía
+// que un 404 contra un CDN dejara sin icono el mismo id servido por otro.
+func TestOrigenDistingueInstanciasDelMismoTipo(t *testing.T) {
+	nuevo := func() *ddragon.Client {
+		c, err := cache.New(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ddragon.New(c, t.TempDir(), "es_ES")
+	}
+	p1, p2 := nuevo(), nuevo()
+	if fmt.Sprintf("%T", p1) != fmt.Sprintf("%T", p2) {
+		t.Skip("el test necesita dos instancias del mismo tipo")
+	}
+
+	s := &Session{Game: model.GameLoL, ItemArt: map[artKey]string{},
+		ChampionArt: map[string]champArt{}, Version: "16.21"}
+	k := artKey{Kind: artItem, ID: 5, Cols: 3, Mode: artHalfBlock, Patch: "16.21"}
+
+	s.Provider = p1
+	s.markArtFailed(k, artFailMissing)
+	if !s.artDidFail(k) {
+		t.Fatal("debía constar con p1")
+	}
+	s.Provider = p2
+	if s.artDidFail(k) {
+		t.Error("otra instancia del mismo tipo es otro origen: no debe compartir el 404")
+	}
 }

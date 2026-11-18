@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -1640,12 +1641,33 @@ func humanAge(d time.Duration) string {
 // artResource identifica el RECURSO descargado, sin nada de la
 // representación. Dos claves de arte con el mismo artResource comparten
 // bytes: si uno falla, el otro también.
+//
+// Por qué NO se indexa por la URL real del recurso:
+//
+//   - La URL de un ítem sí es determinista ({base}/cdn/{v}/img/item/
+//     {id}.png), pero la de una RUNA no: sale del campo `icon` de
+//     runesReforged.json, así que conocerla exige leer y decodificar ese
+//     JSON. Indexar por URL obligaría a resolverla antes de poder
+//     consultar la caché de fallos, es decir, a hacer trabajo (y una
+//     petición la primera vez) solo para saber si hay que hacer una
+//     petición.
+//   - Exponerla requeriría añadir un método a staticdata.Provider, lo
+//     que amplía el alcance más allá de esta auditoría.
+//
+// La tupla de abajo identifica el recurso con la misma precisión
+// práctica sin I/O: origen concreto (no el tipo), tipo de arte, id y
+// parche.
 type artResource struct {
-	// Provider distingue la fuente (Data Dragon para LoL, la API para
-	// Deadlock). Un cambio de proveedor debe permitir pedir de nuevo.
-	Provider string
-	ID       int
-	Patch    string
+	// Origin identifica la INSTANCIA del proveedor, no su tipo. Dos
+	// clientes del mismo tipo con distinto baseURL son orígenes
+	// distintos y no deben compartir fallos.
+	Origin string
+	// Kind separa ítem de runa: sus IDs viven en espacios distintos y
+	// pueden coincidir numéricamente. Sin esto, un 404 de ítem
+	// bloqueaba la runa con el mismo id.
+	Kind  artKind
+	ID    int
+	Patch string
 }
 
 // artFailure explica por qué un recurso no produjo arte.
@@ -1704,16 +1726,30 @@ func (s *Session) artDidFail(key artKey) bool {
 
 // resourceForLocked deriva el recurso de una clave de arte. Quien llama
 // ya tiene el candado.
-//
-// Se usa el tipo concreto del proveedor como identidad: la interfaz
-// staticdata.Provider no expone una, y el tipo distingue Data Dragon de
-// Deadlock, que es lo que importa para no mezclar fuentes.
 func (s *Session) resourceForLocked(key artKey) artResource {
-	prov := "none"
-	if s.Provider != nil {
-		prov = fmt.Sprintf("%T", s.Provider)
+	return artResource{
+		Origin: providerOrigin(s.Provider),
+		Kind:   key.Kind,
+		ID:     key.ID,
+		Patch:  key.Patch,
 	}
-	return artResource{Provider: prov, ID: key.ID, Patch: key.Patch}
+}
+
+// providerOrigin identifica la INSTANCIA del proveedor.
+//
+// Usa el tipo Y la dirección del valor cuando es un puntero. Solo el
+// tipo no basta: dos clientes del mismo tipo con distinto baseURL
+// compartirían fallos, de modo que un 404 contra un CDN dejaría sin
+// icono el mismo id servido por otro.
+func providerOrigin(p staticdata.Provider) string {
+	if p == nil {
+		return "none"
+	}
+	tipo := fmt.Sprintf("%T", p)
+	if v := reflect.ValueOf(p); v.Kind() == reflect.Ptr && !v.IsNil() {
+		return fmt.Sprintf("%s@%x", tipo, v.Pointer())
+	}
+	return tipo
 }
 
 // markArtFailed registra un fallo DEFINITIVO para el recurso.

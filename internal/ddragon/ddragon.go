@@ -400,12 +400,25 @@ func validateRelPath(p string) error {
 }
 
 // ItemIcon descarga (con caché) el icono de un ítem.
-func (cl *Client) ItemIcon(id int) ([]byte, error) {
+// ItemIconURL devuelve la URL del PNG de un ítem para el parche vigente.
+//
+// La URL NO depende de las columnas ni del modo de render: esos solo
+// afectan a cómo se representa el PNG ya descargado. Existe para poder
+// fijar esa propiedad en pruebas y para que la caché de fallos tenga una
+// identidad verificable.
+func (cl *Client) ItemIconURL(id int) (string, error) {
 	v, err := cl.Version()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/cdn/%s/img/item/%d.png", cl.baseURL, v, id), nil
+}
+
+func (cl *Client) ItemIcon(id int) ([]byte, error) {
+	url, err := cl.ItemIconURL(id)
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("%s/cdn/%s/img/item/%d.png", cl.baseURL, v, id)
 	body, _, err := cl.getURL(url, ttlIcon)
 	return body, err
 }
