@@ -828,9 +828,13 @@ func altZoneIdx(plan *lolbuild.Plan, item int) int {
 	return 0
 }
 
-// runeArtCols es el ancho del icono de runa. Tres columnas dan una fila,
-// igual que en Ruta y Alt.
-const runeArtCols = 3
+// runeArtColsPorDefecto es el ancho del icono de runa cuando no hay
+// información de terminal (cmd/render, pruebas): el conservador, igual
+// que iconColsFor.
+//
+// El ancho YA NO es fijo: runeArtCmdFor lo recibe, porque la pestaña de
+// Runas es adaptable y usa los mismos tramos que los ítems.
+const runeArtColsPorDefecto = 3
 
 // ensureRuneArt prepara el arte de la página de runas que se va a
 // mostrar: keystone, primarias y secundarias.
@@ -881,8 +885,8 @@ func runePageIDs(cb *model.CleanBuild) []int {
 //
 // Devuelve nil si no hay nada que cargar (sin proveedor, arte ya
 // presente o descarga ya en curso para la misma clave).
-func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
-	if s == nil || len(ids) == 0 {
+func runeArtCmdFor(s *Session, ids []int, cols int) tea.Cmd {
+	if s == nil || len(ids) == 0 || cols <= 0 {
 		return nil
 	}
 	rp, ok := s.Provider.(staticdata.RuneIconProvider)
@@ -900,7 +904,7 @@ func runeArtCmdFor(s *Session, ids []int) tea.Cmd {
 		if id <= 0 {
 			continue
 		}
-		key := artKey{Kind: artRune, ID: id, Cols: runeArtCols, Mode: artHalfBlock, Patch: s.Version}
+		key := artKey{Kind: artRune, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}
 		if s.hasArt(key) {
 			continue
 		}
@@ -978,6 +982,29 @@ func (m artLoadedMsg) ArtHasWidth(cols int) bool {
 //
 // Cubre las tres pestañas con iconos: Ruta (1), Alt. (2) y Runas (4).
 // Devuelve nil en el resto.
+// tabRuneArtReady dice si la pestaña de Runas ya tiene TODO el arte que
+// necesita para ese ancho. Es el equivalente de tabArtReady para runas:
+// evita relanzar la descarga en cada tick de resize del mismo tramo.
+//
+// Un icono que ya falló se considera resuelto (no hay arte): si no, un
+// 404 relanzaría la descarga en cada resize.
+func (s *Session) tabRuneArtReady(ids []int, cols int) bool {
+	if s == nil || cols <= 0 {
+		return false
+	}
+	if len(ids) == 0 {
+		return true
+	}
+	for _, id := range ids {
+		key := artKey{Kind: artRune, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}
+		if s.hasArt(key) || s.artDidFail(key) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (d detailView) artCmd() tea.Cmd {
 	if d.session == nil || d.session.Game != model.GameLoL {
 		return nil
@@ -998,7 +1025,16 @@ func (d detailView) artCmd() tea.Cmd {
 		}
 		return itemArtCmdFor(d.session, tabItemIDs(d.tab, d.lolPlan()), cols)
 	case 4:
-		return runeArtCmdFor(d.session, runePageIDs(d.CurrentBuild()))
+		cols := d.runeIconCols()
+		if cols == 0 {
+			return nil
+		}
+		// Mismo tramo ya prerenderizado: no repetir la descarga en cada
+		// tick de resize (misma mecánica que en Ruta/Alt.).
+		if d.artCols == cols && d.session.tabRuneArtReady(runePageIDs(d.CurrentBuild()), cols) {
+			return nil
+		}
+		return runeArtCmdFor(d.session, runePageIDs(d.CurrentBuild()), cols)
 	}
 	return nil
 }

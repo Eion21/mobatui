@@ -96,11 +96,12 @@ func TestCaracterizacionRunasPorAncho(t *testing.T) {
 	// Presencia registrada sobre 3a633af. Se actualiza SOLO si el
 	// rediseño gana elementos, nunca si pierde.
 	esperado := map[int]elementosRunas{
-		// A 30 y 40 el borde del viewport corta el segundo panel: el
-		// árbol secundario y los fragmentos NO se ven hoy (medido en
-		// 3a633af). Desde 59 se ven todos.
-		30:  {keystone: true, primario: true, alt: true, winRate: true, partidas: true},
-		40:  {keystone: true, primario: true, alt: true, winRate: true, partidas: true},
+		// A 30, 40 y 59 (<60) el borde del viewport cortaba el segundo
+		// panel: en 3a633af NO se veían ni el árbol secundario ni los
+		// fragmentos. El formato vertical apilado los recupera, así que
+		// el esperado sube en esos dos elementos: solo se gana.
+		30:  {keystone: true, primario: true, secundario: true, fragmentos: true, alt: true, winRate: true, partidas: true},
+		40:  {keystone: true, primario: true, secundario: true, fragmentos: true, alt: true, winRate: true, partidas: true},
 		59:  {keystone: true, primario: true, secundario: true, fragmentos: true, alt: true, winRate: true, partidas: true},
 		60:  {keystone: true, primario: true, secundario: true, fragmentos: true, alt: true, winRate: true, partidas: true},
 		99:  {keystone: true, primario: true, secundario: true, fragmentos: true, alt: true, winRate: true, partidas: true},

@@ -2095,18 +2095,31 @@ func (d detailView) coreTopLine() string {
 // arte. No hace peticiones: el arte se preparó al abrir la pestaña.
 //
 // En terminal estrecha se omite para no desplazar el nombre.
+// runeIconInline devuelve el icono de runa con un espacio final, o "" si
+// no hay arte, no hay sitio o el ancho es estrecho.
+//
+// Las columnas NO son fijas: salen de iconColsFor, los mismos tramos que
+// los ítems (<60 sin icono, 60-99 tres, 100-117 cuatro, >=118 seis).
 func (d detailView) runeIconInline(id int) string {
 	if id <= 0 {
 		return ""
 	}
-	if d.width > 0 && d.width < 60 {
+	cols := iconColsFor(d.width)
+	if cols == 0 {
 		return ""
 	}
-	icon := d.session.RuneArtFor(id, runeArtCols)
+	icon := d.session.RuneArtFor(id, cols)
 	if icon == "" {
 		return ""
 	}
 	return icon + " "
+}
+
+// runeIconCols devuelve las columnas de icono de runa para esta vista.
+// Es la MISMA función que la de ítems a propósito: si divergieran, el
+// arte se precargaría con un ancho que nadie pinta.
+func (d detailView) runeIconCols() int {
+	return iconColsFor(d.width)
 }
 
 // routeFreshness decide si una ruta merece aviso de antigüedad.
@@ -2207,51 +2220,152 @@ func (d detailView) matchupsView() string {
 
 // ─── pestaña runas ─────────────────────────────────────────────────
 
-// runesView: keystone protagonista, resto en dos columnas (árbol
-// primario / secundario + fragmentos) y la alternativa al pie.
+// runesView: keystone protagonista, árboles y fragmentos, y la
+// alternativa al pie. El formato es ADAPTABLE al ancho:
+//
+//	<60   un solo panel, apilado en vertical, sin iconos
+//	>=60  dos paneles en horizontal, con iconos según iconColsFor
+//
+// Regla de información: nada que se viera antes en un ancho puede
+// desaparecer. A <60 hoy se perdían el árbol secundario y los fragmentos
+// porque el borde del viewport cortaba el segundo panel; apilando en
+// vertical se ven todos.
+//
+// El scroll corre por cuenta del viewport (detail.go:836, sync →
+// d.vp.SetContent), así que aquí no se oculta nada por altura.
 func (d detailView) runesView() string {
 	b := d.CurrentBuild()
 	if len(b.RunePages) == 0 {
 		return stDim.Render("sin runas con muestra suficiente")
 	}
 	p := b.RunePages[0]
-	// La keystone es la runa más identificativa: lleva icono siempre que
-	// exista recurso, y su nombre textual se conserva.
+
+	// Cabecera: keystone y el resumen de árboles/WR/muestra. Es lo
+	// único que se muestra en TODOS los anchos.
 	head := lipgloss.JoinVertical(lipgloss.Left,
 		stSection.Render("◆ "+d.runeIconInline(p.KeystoneID)+d.session.RuneName(p.KeystoneID)),
-		stDim.Render(fmt.Sprintf("%s / %s · WR %s · %s partidas",
-			stValue.Render(d.session.TreeName(p.PrimaryTree)),
-			stValue.Render(d.session.TreeName(p.SecondaryTree)),
-			wrStyle(p.WinRate, p.Games).Render(pct(p.WinRate)),
-			nThousand(p.Games),
-		)))
-	bullet := func(ids []int) []string {
-		out := make([]string, 0, len(ids))
-		for _, id := range ids {
-			out = append(out, "• "+d.runeIconInline(id)+d.session.RuneName(id))
-		}
-		return out
-	}
+		stDim.Render(d.runeSummary(p)),
+	)
+
 	prim := lipgloss.JoinVertical(lipgloss.Left, append([]string{
-		stValue.Render(d.session.TreeName(p.PrimaryTree))}, bullet(p.PrimaryIDs)...)...)
-	secLines := append([]string{stValue.Render(d.session.TreeName(p.SecondaryTree))},
-		bullet(p.SecondaryIDs)...)
-	shards := make([]string, 0, len(p.Shards))
-	for _, id := range p.Shards {
-		shards = append(shards, d.session.ShardName(id))
+		stValue.Render(d.session.TreeName(p.PrimaryTree))}, d.runeBullets(p.PrimaryIDs)...)...)
+	sec := lipgloss.JoinVertical(lipgloss.Left, append([]string{
+		stValue.Render(d.session.TreeName(p.SecondaryTree))}, d.runeBullets(p.SecondaryIDs)...)...)
+	alt := d.runeAltLine(b)
+
+	// Terminal estrecho: una sola columna. En vertical no hay borde que
+	// corte el segundo panel.
+	if d.width > 0 && d.width < artMinWidth {
+		parts := []string{head, "", wrapANSI(prim, d.width), "", wrapANSI(sec, d.width)}
+		// Los fragmentos se pintaban en el panel secundario y a <60 el
+		// borde los cortaba: sin esta línea se PERDERÍAN respecto a
+		// 3a633af en la banda 59, que es justo lo prohibido.
+		if shards := d.runeShardsLine(p); shards != "" {
+			parts = append(parts, "", wrapANSI(shards, d.width))
+		}
+		if alt != "" {
+			parts = append(parts, "", alt)
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
-	secLines = append(secLines, "", stDim.Render("fragmentos: "+strings.Join(shards, " · ")))
-	sec := lipgloss.JoinVertical(lipgloss.Left, secLines...)
+
+	// Ancho suficiente: dos paneles. Los fragmentos van al pie del
+	// secundario dentro de su panel, para no empujar la línea del `alt:`
+	// fuera del viewport.
+	shards := d.runeShardsLine(p)
+	if shards != "" {
+		sec = lipgloss.JoinVertical(lipgloss.Left, sec, "", shards)
+	}
 	cols := lipgloss.JoinHorizontal(lipgloss.Top,
 		stPanel.Render(prim), "  ", stPanel.Render(sec))
-	out := lipgloss.JoinVertical(lipgloss.Left, head, "", cols)
-	if len(b.RunePages) > 1 {
-		alt := b.RunePages[1]
-		out = lipgloss.JoinVertical(lipgloss.Left, out,
-			stDim.Render(fmt.Sprintf("alt: %s (%s partidas)",
-				d.session.RuneName(alt.KeystoneID), nThousand(alt.Games))))
+	parts := []string{head, "", cols}
+	if alt != "" {
+		parts = append(parts, "", alt)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// runeSummary compone la línea de resumen: árboles, WR y partidas. Se
+// parte en varias líneas si el ancho no la admite entera.
+func (d detailView) runeSummary(p model.RankedRunePage) string {
+	return fmt.Sprintf("%s / %s · WR %s · %s partidas",
+		stValue.Render(d.session.TreeName(p.PrimaryTree)),
+		stValue.Render(d.session.TreeName(p.SecondaryTree)),
+		wrStyle(p.WinRate, p.Games).Render(pct(p.WinRate)),
+		nThousand(p.Games),
+	)
+}
+
+// runeBullets devuelve una entrada por runa, con su icono si cabe.
+func (d detailView) runeBullets(ids []int) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, "• "+d.runeIconInline(id)+d.session.RuneName(id))
 	}
 	return out
+}
+
+// runeShardsLine devuelve la línea de fragmentos, o "" si la página no
+// los declara.
+func (d detailView) runeShardsLine(p model.RankedRunePage) string {
+	if len(p.Shards) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(p.Shards))
+	for _, id := range p.Shards {
+		if n := d.session.ShardName(id); n != "" {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return stDim.Render("fragmentos: " + strings.Join(names, " · "))
+}
+
+// runeAltLine devuelve la alternativa al pie, o "" si solo hay una.
+func (d detailView) runeAltLine(b *model.CleanBuild) string {
+	if len(b.RunePages) < 2 {
+		return ""
+	}
+	alt := b.RunePages[1]
+	return stDim.Render(fmt.Sprintf("alt: %s (%s partidas)",
+		d.session.RuneName(alt.KeystoneID), nThousand(alt.Games)))
+}
+
+// wrapANSI parte una cadena ANSI por palabras para que ninguna línea
+// visible exceda width columnas. Es necesario a <60: el valor de
+// `TreeName` o el nombre de una runa puede no caber.
+func wrapANSI(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	// Se parte por palabras conservando los estilos: al recomponer con
+	// "\n" cada línea arrastra el estilo que tenía.
+	// lipgloss.Width ignora los códigos ANSI, así que si ya cabe no se
+	// toca: partir por palabras rompería los estilos por la mitad.
+	palabras := strings.Fields(s)
+	if len(palabras) == 0 {
+		return s
+	}
+	var out []string
+	actual := ""
+	for _, w := range palabras {
+		if actual == "" {
+			actual = w
+			continue
+		}
+		if lipgloss.Width(actual)+1+lipgloss.Width(w) <= width {
+			actual += " " + w
+			continue
+		}
+		out = append(out, actual)
+		actual = w
+	}
+	if actual != "" {
+		out = append(out, actual)
+	}
+	return strings.Join(out, "\n")
 }
 
 // emptySkillsReason distingue POR QUÉ no hay rejilla de habilidades:

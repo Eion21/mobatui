@@ -174,7 +174,7 @@ func TestReservaConcurrenteNoNiegaElContador(t *testing.T) {
 func TestInvalidateArtConReservaDeRuna(t *testing.T) {
 	p := &cuentaProvider{raw: pngValido(t)}
 	s := sesionReservas(p)
-	k := artKey{Kind: artRune, ID: 8100, Cols: runeArtCols, Mode: artHalfBlock, Patch: "16.21"}
+	k := artKey{Kind: artRune, ID: 8100, Cols: runeArtColsPorDefecto, Mode: artHalfBlock, Patch: "16.21"}
 
 	if !s.reserveArt(k) {
 		t.Fatal("debía reservar")

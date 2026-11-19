@@ -40,7 +40,7 @@ func sesionRunas2(p staticdata.Provider) *Session {
 }
 
 // TestRuna404UnaSolaSolicitudPorAncho: 404 de una runa y cambio de
-// ancho ⇒ EXACTAMENTE 1 solicitud. Como runeArtCols es fijo, se llama a
+// ancho ⇒ EXACTAMENTE 1 solicitud. Como runeArtColsPorDefecto es fijo, se llama a
 // runeArtCmdFor directamente con claves de distinto Cols.
 func TestRuna404UnaSolaSolicitudPorAncho(t *testing.T) {
 	p := &proveedorRunas{err: &ddragon.HTTPError{URL: "u", StatusCode: 404}}
@@ -48,28 +48,28 @@ func TestRuna404UnaSolaSolicitudPorAncho(t *testing.T) {
 	const id = 8100
 
 	// Primer intento: descarga y 404.
-	cmd := runeArtCmdFor(s, []int{id})
+	cmd := runeArtCmdFor(s, []int{id}, runeArtColsPorDefecto)
 	if cmd == nil {
 		t.Fatal("debía pedir la runa")
 	}
 	_ = cmd()
 
 	// La clave quedó marcada como ausente.
-	k3 := artKey{Kind: artRune, ID: id, Cols: runeArtCols, Mode: artHalfBlock, Patch: "16.21"}
+	k3 := artKey{Kind: artRune, ID: id, Cols: runeArtColsPorDefecto, Mode: artHalfBlock, Patch: "16.21"}
 	if !s.artDidFail(k3) {
 		t.Fatal("el 404 de la runa debía memorizarse")
 	}
 
 	// Cambio de ancho (Fase 3): otra clave del MISMO recurso.
-	artRuneColsGuardado := runeArtCols
+	artRuneColsGuardado := runeArtColsPorDefecto
 	_ = artRuneColsGuardado
-	otra := artKey{Kind: artRune, ID: id, Cols: runeArtCols + 3, Mode: artHalfBlock, Patch: "16.21"}
+	otra := artKey{Kind: artRune, ID: id, Cols: runeArtColsPorDefecto + 3, Mode: artHalfBlock, Patch: "16.21"}
 	if !s.artDidFail(otra) {
 		t.Error("un 404 de runa debe aplicar a todos los anchos del recurso")
 	}
 
 	// Y no debe volver a pedirse.
-	if cmd2 := runeArtCmdFor(s, []int{id}); cmd2 != nil {
+	if cmd2 := runeArtCmdFor(s, []int{id}, runeArtColsPorDefecto); cmd2 != nil {
 		_ = cmd2()
 	}
 	if p.solicitudes != 1 {
@@ -84,7 +84,7 @@ func TestRuna404NoBloqueaItemMismoID(t *testing.T) {
 	s := sesionRunas2(p)
 	const id = 8200
 
-	_ = runeArtCmdFor(s, []int{id})
+	_ = runeArtCmdFor(s, []int{id}, runeArtColsPorDefecto)
 
 	kItem := artKey{Kind: artItem, ID: id, Cols: smallArtCols, Mode: artHalfBlock, Patch: "16.21"}
 	if s.artDidFail(kItem) {
@@ -114,12 +114,12 @@ func TestRunaFallosTransitoriosNoSeMemorizan(t *testing.T) {
 			p := &proveedorRunas{err: c.err}
 			s := sesionRunas2(p)
 			const id = 8300
-			_ = runeArtCmdFor(s, []int{id})()
-			k := artKey{Kind: artRune, ID: id, Cols: runeArtCols, Mode: artHalfBlock, Patch: "16.21"}
+			_ = runeArtCmdFor(s, []int{id}, runeArtColsPorDefecto)()
+			k := artKey{Kind: artRune, ID: id, Cols: runeArtColsPorDefecto, Mode: artHalfBlock, Patch: "16.21"}
 			if s.artDidFail(k) {
 				t.Errorf("%s no debe memorizarse como definitivo", c.nombre)
 			}
-			again := runeArtCmdFor(s, []int{id})
+			again := runeArtCmdFor(s, []int{id}, runeArtColsPorDefecto)
 			if again == nil {
 				t.Fatalf("%s debe permitir reintentar", c.nombre)
 			}
@@ -135,14 +135,14 @@ func TestRunaRespuestaTardiaEnSuClave(t *testing.T) {
 	s := sesionRunas2(p)
 	const id = 8400
 
-	cmd := runeArtCmdFor(s, []int{id})
+	cmd := runeArtCmdFor(s, []int{id}, runeArtColsPorDefecto)
 	if cmd == nil {
 		t.Fatal("debía pedir")
 	}
 	msg := cmd().(artLoadedMsg)
 
 	// La clave pedida debe estar en el mensaje.
-	k := artKey{Kind: artRune, ID: id, Cols: runeArtCols, Mode: artHalfBlock, Patch: "16.21"}
+	k := artKey{Kind: artRune, ID: id, Cols: runeArtColsPorDefecto, Mode: artHalfBlock, Patch: "16.21"}
 	if _, ok := msg.Art[k]; !ok {
 		t.Errorf("la respuesta no está bajo su clave %+v", k)
 	}
@@ -157,16 +157,16 @@ func TestRunaTresCmdSinResolverUnaSolicitud(t *testing.T) {
 	const id = 8500
 
 	// 1.er ancho: es quien reserva y recibe el Cmd.
-	cmd := runeArtCmdFor(s, []int{id})
+	cmd := runeArtCmdFor(s, []int{id}, runeArtColsPorDefecto)
 	if cmd == nil {
 		t.Fatal("el primer ancho debía lanzar la descarga")
 	}
 
 	// 2.º y 3.er ancho del mismo recurso: esperan, no lanzan.
-	base := artKey{Kind: artRune, ID: id, Cols: runeArtCols, Mode: artHalfBlock, Patch: "16.21"}
+	base := artKey{Kind: artRune, ID: id, Cols: runeArtColsPorDefecto, Mode: artHalfBlock, Patch: "16.21"}
 	for _, extra := range []int{1, 2} {
 		k := base
-		k.Cols = runeArtCols + extra
+		k.Cols = runeArtColsPorDefecto + extra
 		if s.reserveArt(k) {
 			t.Errorf("el ancho +%d no debía lanzar otra descarga", extra)
 		}
