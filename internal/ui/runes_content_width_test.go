@@ -156,3 +156,37 @@ type sinIconosProvider struct{ staticdata.Provider }
 func (sinIconosProvider) RuneIcon(int) ([]byte, error) {
 	return nil, errors.New("sin arte")
 }
+
+// TestRunasUmbralConIconos mide, CON ICONOS REALES, el modo y el ancho
+// de runesView antes del viewport alrededor del umbral horizontal.
+//
+// El umbral se deriva midiendo los paneles SIN iconos (a propósito: con
+// arte, medir el umbral haría que dependiera del arte y runeIconInline
+// volvería a llamar al layout, con recursión infinita). Esta prueba
+// comprueba que el umbral derivado sigue siendo correcto CUANDO los
+// iconos están puestos, que es el caso real.
+func TestRunasUmbralConIconos(t *testing.T) {
+	anchos := []int{88, 89, 90, 91, 92, 93, 94, 95, 96, 100, 118, 160}
+	for _, w := range anchos {
+		d := vistaRunasConIconos(t, w)
+		b := d.CurrentBuild()
+		lay := d.runesLayout(b)
+		modo := "horizontal"
+		if lay.Vertical {
+			modo = "vertical"
+		}
+		var max, n int
+		for _, l := range strings.Split(d.runesView(), "\n") {
+			if lw := lipgloss.Width(l); lw > max {
+				max = lw
+			}
+			if lipgloss.Width(l) > w {
+				n++
+			}
+		}
+		t.Logf("ancho=%3d modo=%-10s max=%3d exceden=%d iconos=%d", w, modo, max, n, lay.IconCols)
+		if n > 0 {
+			t.Errorf("ancho %d (%s): %d líneas exceden (máx %d)", w, modo, n, max)
+		}
+	}
+}
