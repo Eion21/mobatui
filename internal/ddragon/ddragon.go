@@ -7,6 +7,7 @@ package ddragon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,19 +76,59 @@ func (cl *Client) WithHTTPClient(h *http.Client) *Client {
 	return cl
 }
 
+// HTTPError es un fallo de Data Dragon con código de estado.
+//
+// Existe para que quien consume un icono pueda distinguir un recurso
+// DEFINITIVAMENTE ausente (404/410: ese PNG no existe para este parche)
+// de un fallo TRANSITORIO (5xx, timeout, DNS). Sin esta distinción, la
+// UI no puede decidir entre "no volver a pedirlo" y "reintentar cuando
+// vuelva la red", y acaba tratando igual ambos casos.
+type HTTPError struct {
+	URL        string
+	StatusCode int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("ddragon: %s → HTTP %d", e.URL, e.StatusCode)
+}
+
+// NotFound indica que el recurso no existe en el CDN para esta versión.
+// Es un fallo permanente: reintentarlo daría el mismo 404.
+func (e *HTTPError) NotFound() bool {
+	return e.StatusCode == http.StatusNotFound || e.StatusCode == http.StatusGone
+}
+
+// IsNotFound informa de si el error (posiblemente envuelto) es un 404/410.
+func IsNotFound(err error) bool {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.NotFound()
+	}
+	return false
+}
+
 // getURL resuelve una URL con caché → HTTP → fixture.
 func (cl *Client) getURL(url string, ttl time.Duration) ([]byte, cache.State, error) {
-	res, err := cl.c.Get(url, ttl, func() ([]byte, error) {
+	return cl.getURLValidated(url, ttl, nil)
+}
+
+// getURLValidated es getURL con validador de cuerpo opcional.
+//
+// Solo los iconos pasan validador (ValidatePNG): un PNG truncado no debe
+// escribirse en la caché, porque su TTL es de 720 h y ningún reintento
+// podría recuperarlo mientras la entrada siga vigente.
+func (cl *Client) getURLValidated(url string, ttl time.Duration, validate func([]byte) error) ([]byte, cache.State, error) {
+	res, err := cl.c.GetValidated(url, ttl, func() ([]byte, error) {
 		resp, err := cl.http.Get(url)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("ddragon: %s → HTTP %d", url, resp.StatusCode)
+			return nil, &HTTPError{URL: url, StatusCode: resp.StatusCode}
 		}
 		return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	})
+	}, validate)
 	if err == nil {
 		return res.Body, res.State, nil
 	}
@@ -318,7 +359,7 @@ func (cl *Client) RuneIcon(id int) ([]byte, error) {
 		return nil, err
 	}
 	url := fmt.Sprintf("%s/cdn/img/%s", cl.baseURL, icon)
-	body, _, err := cl.getURL(url, ttlIcon)
+	body, _, err := cl.getURLValidated(url, ttlIcon, ValidatePNG)
 	return body, err
 }
 
@@ -368,13 +409,26 @@ func validateRelPath(p string) error {
 }
 
 // ItemIcon descarga (con caché) el icono de un ítem.
-func (cl *Client) ItemIcon(id int) ([]byte, error) {
+// ItemIconURL devuelve la URL del PNG de un ítem para el parche vigente.
+//
+// La URL NO depende de las columnas ni del modo de render: esos solo
+// afectan a cómo se representa el PNG ya descargado. Existe para poder
+// fijar esa propiedad en pruebas y para que la caché de fallos tenga una
+// identidad verificable.
+func (cl *Client) ItemIconURL(id int) (string, error) {
 	v, err := cl.Version()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/cdn/%s/img/item/%d.png", cl.baseURL, v, id), nil
+}
+
+func (cl *Client) ItemIcon(id int) ([]byte, error) {
+	url, err := cl.ItemIconURL(id)
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("%s/cdn/%s/img/item/%d.png", cl.baseURL, v, id)
-	body, _, err := cl.getURL(url, ttlIcon)
+	body, _, err := cl.getURLValidated(url, ttlIcon, ValidatePNG)
 	return body, err
 }
 

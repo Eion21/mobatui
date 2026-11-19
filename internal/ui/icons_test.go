@@ -412,7 +412,7 @@ func TestRunasConIconosReales(t *testing.T) {
 
 	conArte := 0
 	for _, id := range ids {
-		if d.session.RuneArtFor(id, runeArtCols) != "" {
+		if d.session.RuneArtFor(id, d.runeIconCols()) != "" {
 			conArte++
 		}
 	}
@@ -924,7 +924,7 @@ func newRuneArtProviderB(b *testing.B, ids []int) *runeArtProvider {
 // resultado, replicando lo que hace Bubble Tea al recibir el mensaje.
 func loadRuneArtSync(t testing.TB, d *detailView) {
 	t.Helper()
-	cmd := runeArtCmdFor(d.session, runePageIDs(d.CurrentBuild()))
+	cmd := runeArtCmdFor(d.session, runePageIDs(d.CurrentBuild()), d.runeIconCols())
 	if cmd == nil {
 		return
 	}
@@ -952,4 +952,8 @@ func loadArtSync(t testing.TB, d *detailView) {
 	for k, art := range msg.Art {
 		d.session.putArt(k, art)
 	}
+	// Se recuerda el ancho cargado igual que en el bucle real (ver el
+	// caso artLoadedMsg): sin esto, tabArtReady y la reprecarga al
+	// redimensionar no se comportarían como en producción.
+	d.artCols = iconColsFor(d.width)
 }

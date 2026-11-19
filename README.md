@@ -42,6 +42,13 @@ Desarrollada en Go con [Bubble Tea](https://github.com/charmbracelet/bubbletea) 
 - **Monitor de partida (`m`):** Detecta automáticamente si el juego está abierto y, en League of Legends, identifica tu campeón en tiempo real mediante la *Live Client Data API*.
 - **Identificable y actualizable:** `mobatui --version` muestra versión, commit, Go y plataforma. Al arrancar avisa si hay una versión nueva en GitHub (sin bloquear y sin autoactualizarse); se desactiva con `-no-update-check` o `-offline`.
 
+## Novedades de v0.2.2
+
+- **Procedencia estadística de las recomendaciones:** cada build declara de qué consulta y de qué parche vienen sus datos, y distingue muestra real de respaldo local o de caché caducada. La incertidumbre se presenta como incertidumbre, nunca como probabilidad de ganar.
+- **Iconos que se adaptan al ancho del terminal:** texto por debajo de 60 columnas, icono de 3 columnas entre 60 y 99, de 4 entre 100 y 117, y de 6 desde 118.
+- **Pestaña de Runas adaptable:** por debajo de 90 columnas los árboles, los fragmentos y la alternativa se apilan en una columna; desde 90 se pintan en dos paneles. Nunca se pierde información al estrechar la ventana.
+- **Iconos de ítem y de runa más robustos:** un PNG corrupto o truncado ya no queda guardado en la caché durante el TTL largo, y las descargas en curso se comparten entre tamaños en lugar de repetirse.
+
 ### Deadlock (vía [deadlock-api.com](https://deadlock-api.com))
 - **Generador híbrido de builds:** Combina estadística por ítem con un motor de progresión que respeta cadenas de mejora, consumo de componentes y límites de inventario.
 - **Fases y contexto:** Rutas divididas en **EARLY / MID / LATE**, extensiones para partidas largas e ítems **situacionales** agrupados por función (anti-heal, defensa física/espiritual, resistencia a CC, supervivencia y daño extra).
@@ -78,6 +85,8 @@ go build -o mobatui .
 
 La caché se guarda en el directorio de caché del usuario (por defecto `~/.cache/mobatui` en Linux) y la configuración en `~/.config/mobatui/config.json`. No se escriben archivos dentro del repositorio.
 
+> **Aviso sobre gestores de paquetes:** los manifiestos de **WinGet** y **Scoop** (y el *cask* de Homebrew) se generan con la release v0.2.2, pero **todavía no están publicados** en sus repositorios. Hasta que lo estén, instala desde el archivo publicado en la página de releases o con `go install`.
+
 ### Flags disponibles
 
 | Flag | Por defecto | Descripción |
@@ -110,7 +119,8 @@ La caché se guarda en el directorio de caché del usuario (por defecto `~/.cach
 | `v` / `V` | Abrir la release nueva en el navegador / descartar el aviso |
 | `a` | Cambiar modo de retrato |
 | `m` | Activar o desactivar el monitor de juego |
-| `?` | Mostrar/ocultar ayuda de atajos |
+| `?` | Mostrar u ocultar la ayuda de atajos |
+| `q` / `ctrl+c` | Salir |
 | `esc` | Cerrar popup, limpiar filtro o volver atrás |
 | `rueda del ratón` | Desplazar vista |
 
@@ -207,7 +217,7 @@ go run ./cmd/render deadlock     # Renderizado en texto plano para depurar layou
 │   ├── deadlock/       # Cliente API, rutas, evaluación y generador híbrido
 │   ├── progression/    # Catálogo, cadenas de mejora y simulación de inventario
 │   ├── lolalytics/     # Cliente de estadísticas de LoL
-│   ├── ddragon/        # Datos estáticos e imágenes de Data Dragon
+│   ├── ddragon/        # Datos estáticos e imágenes de Data Dragon (validadas)
 │   ├── clean/          # Puntuación de Wilson y limpieza de builds
 │   ├── ui/             # Vistas Bubble Tea, tarjetas y navegación
 │   └── cache/          # Caché en disco (TTL, stale-if-error)

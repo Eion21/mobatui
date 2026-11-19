@@ -3,9 +3,11 @@ package ui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image/color"
 	"image/png"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 
+	"github.com/Eion21/mobatui/internal/cache"
 	"github.com/Eion21/mobatui/internal/clean"
 	"github.com/Eion21/mobatui/internal/config"
 	"github.com/Eion21/mobatui/internal/ddragon"
@@ -135,9 +138,25 @@ type Session struct {
 	//
 	// runeArtMu protege el mapa: la goroutine del Cmd escribe y el bucle
 	// de Update/View lee.
-	runeArtMu   sync.RWMutex
-	RuneArt     map[artKey]string
-	runePending map[artKey]bool
+	runeArtMu sync.RWMutex
+	RuneArt   map[artKey]string
+	// runePending cuenta por RECURSO cuántas claves esperan la misma
+	// descarga (ver reserveArt).
+	runePending map[artResource]int
+	// pendingKeys evita reservar dos veces la misma representación.
+	pendingKeys map[artKey]bool
+	// artGen se incrementa en cada invalidación. Una descarga en vuelo
+	// que termina DESPUÉS no debe tocar los contadores de la generación
+	// nueva: keyGen recuerda a qué generación pertenece cada reserva.
+	keyGen map[artKey]int
+	artGen int
+	// artFailed recuerda por qué una clave no tiene arte, y solo para
+	// los fallos DEFINITIVOS (ver artFailure). Un fallo transitorio NO
+	// se apunta: si la red vuelve, el icono debe poder recuperarse.
+	//
+	// Sin este registro, tabArtReady nunca daría por completa la
+	// pestaña y cada evento de resize relanzaría la misma descarga.
+	artFailed map[artResource]artFailure
 	// Routes guarda la ruta de compra por héroe (Deadlock, carga bajo
 	// demanda al abrir el detalle): orden de consenso, cadena y tasas.
 	// nil = en curso; vacía = sin datos (muestra insuficiente o error).
@@ -281,7 +300,15 @@ func (s *Session) hasArt(key artKey) bool {
 	return ok
 }
 
-// runeArtPending marca una descarga en curso para no duplicarla.
+// reserveArt registra que se va a descargar el RECURSO de la clave.
+//
+// Devuelve true solo la PRIMERA vez que se reserva ese recurso: las demás
+// claves que lo esperan (distintos anchos y modos del mismo icono) no
+// duplican la descarga. La reserva lleva un contador de referencias, de
+// modo que se libera cuando termina el ÚLTIMO interesado y no el primero.
+//
+// Antes se indexaba por artKey, que incluye las columnas: lanzar 3, 4 y 6
+// columnas sin resolver provocaba TRES descargas del mismo PNG.
 func (s *Session) reserveArt(key artKey) bool {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
@@ -289,20 +316,73 @@ func (s *Session) reserveArt(key artKey) bool {
 		return false
 	}
 	if s.runePending == nil {
-		s.runePending = map[artKey]bool{}
+		s.runePending = map[artResource]int{}
 	}
-	if s.runePending[key] {
+	// La espera se anota también por clave para no re-renderizar dos
+	// veces la misma representación.
+	if s.pendingKeys == nil {
+		s.pendingKeys = map[artKey]bool{}
+	}
+	if s.pendingKeys[key] {
 		return false
 	}
-	s.runePending[key] = true
-	return true
+	s.pendingKeys[key] = true
+	if s.keyGen == nil {
+		s.keyGen = map[artKey]int{}
+	}
+	s.keyGen[key] = s.artGen
+	res := s.resourceForLocked(key)
+	s.runePending[res]++
+	// Solo el primer interesado lanza la descarga.
+	return s.runePending[res] == 1
 }
 
-// releaseArt libera la reserva (haya o no arte).
-func (s *Session) releaseArt(key artKey) {
+// releaseArt libera la reserva del recurso de la clave.
+//
+// Debe llamarse SIEMPRE (éxito, 404, corrupto, transitorio) o la clave
+// quedaría bloqueada para siempre. Un intento posterior solo se relanza
+// cuando el contador de referencias llega a cero.
+func (s *Session) releaseArt(key artKey, gen int) {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
-	delete(s.runePending, key)
+	if s.runePending == nil {
+		return
+	}
+	// Un Cmd en vuelo puede terminar DESPUÉS de InvalidateArt, que abrió
+	// una generación nueva con los mapas vacíos. Su liberación pertenece
+	// a la generación vieja y no debe restar una referencia de la nueva:
+	// llegaría a 0 y borraría la reserva de un Cmd nuevo, que entonces
+	// podría descargarse dos veces.
+	if gen != s.artGen {
+		return
+	}
+	if s.pendingKeys != nil {
+		delete(s.pendingKeys, key)
+	}
+	if s.keyGen != nil {
+		delete(s.keyGen, key)
+	}
+	res := s.resourceForLocked(key)
+	s.runePending[res]--
+	if s.runePending[res] <= 0 {
+		delete(s.runePending, res)
+	}
+}
+
+// artGenOf devuelve la generación vigente. Quien reserva la guarda y la
+// pasa a releaseArt al terminar, para no liberar reservas de una
+// generación posterior a una invalidación.
+func (s *Session) artGenOf(key artKey) int {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	return s.keyGen[key]
+}
+
+// pendingFor indica cuántas claves esperan el recurso de esta clave.
+func (s *Session) pendingFor(key artKey) int {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	return s.runePending[s.resourceForLocked(key)]
 }
 
 // RuneArtFor devuelve el arte de una runa o "" si no está disponible.
@@ -317,7 +397,10 @@ func (s *Session) InvalidateRuneArt() {
 	s.runeArtMu.Lock()
 	defer s.runeArtMu.Unlock()
 	s.RuneArt = map[artKey]string{}
-	s.runePending = map[artKey]bool{}
+	s.runePending = map[artResource]int{}
+	s.pendingKeys = map[artKey]bool{}
+	s.keyGen = map[artKey]int{}
+	s.artGen++
 }
 
 // ItemArtFor devuelve el arte de un ítem para el tamaño y modo dados.
@@ -326,9 +409,26 @@ func (s *Session) ItemArtFor(id, cols int) string {
 	return s.ItemArt[artKey{Kind: artItem, ID: id, Cols: cols, Mode: artHalfBlock, Patch: s.Version}]
 }
 
-// InvalidateArt vacía la caché de arte (cambio de parche o de modo).
+// InvalidateArt vacía la caché de arte (cambio de parche, de proveedor
+// o de modo).
+//
+// Limpia TAMBIÉN los fallos memorizados: un 404 del parche anterior no
+// dice nada del nuevo, y un proveedor distinto puede sí tener el icono.
+// Sin esto, un cambio de versión de Data Dragon dejaría ítems marcados
+// como ausentes para siempre.
 func (s *Session) InvalidateArt() {
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
 	s.ItemArt = map[artKey]string{}
+	s.artFailed = map[artResource]artFailure{}
+	// Las reservas también se reinician: una reserva viva sin su Cmd
+	// dejaría el recurso bloqueado para siempre en esta sesión. La
+	// generación sube para que las descargas en vuelo no liberen
+	// reservas de la generación nueva al terminar.
+	s.runePending = map[artResource]int{}
+	s.pendingKeys = map[artKey]bool{}
+	s.keyGen = map[artKey]int{}
+	s.artGen++
 }
 
 // ItemName resuelve el nombre real de un ítem con fallback.
@@ -906,7 +1006,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.detail.vp.Width = m.Width - 4
 		a.detail.vp.Height = max(8, m.Height-10)
 		a.help.Width = m.Width
-		return a, nil
+		// El ancho de los iconos de Ruta/Alt. depende del terminal: al
+		// cambiar de tramo hay que reprecargar el arte con el ancho
+		// nuevo. Sin esto, redimensionar reutilizaba iconos de 3
+		// columnas en una línea que ya pedía 6 (deformados o ausentes).
+		var artCmd tea.Cmd
+		if a.detail.tab == 1 || a.detail.tab == 2 {
+			nuevo := iconColsFor(m.Width)
+			if nuevo != a.detail.artCols {
+				artCmd = a.detail.artCmd()
+			}
+		}
+		return a, artCmd
 
 	case tea.MouseMsg:
 		// La rueda va siempre al detalle (scroll del viewport); los
@@ -965,6 +1076,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.session != nil {
 			for k, art := range m.Art {
 				a.session.putArt(k, art)
+			}
+			// Se recuerda el ancho con el que se acaba de cargar, pero
+			// SOLO si coincide con el que la vista pide AHORA.
+			//
+			// Caso real: el usuario redimensiona 80 → 118 mientras la
+			// descarga de 3 columnas está en vuelo. Al llegar, ese arte
+			// se guarda bajo su clave (3 col), que es correcta y no pisa
+			// la de 6; pero dar por cargado "el ancho vigente" haría que
+			// tabArtReady creyera que 6 ya está listo y la línea se
+			// quedara sin icono. Solo se marca cuando el ancho de la
+			// respuesta es el vigente.
+			cols := iconColsFor(a.detail.width)
+			if cols != 0 && m.ArtHasWidth(cols) {
+				a.detail.artCols = cols
 			}
 			a.detail.sync()
 		}
@@ -1521,19 +1646,23 @@ func (a App) footer() string {
 }
 
 // statusLine resume el origen de los datos de la sesión.
+//
+// El parche del pie es el del CATÁLOGO (Session.Version): el resto de la
+// línea describe lo que la aplicación tiene cargado (campeones, builds).
+// El parche de las estadísticas vive en la cabecera del detalle. Antes
+// ambos números aparecían sin etiqueta y parecían contradecirse.
 func statusLine(s *Session) string {
 	src := "fixtures"
 	if len(s.Builds) > 0 && s.Builds[0].Source != "" {
 		src = s.Builds[0].Source
 	}
-	patch := s.Version
-	if patch == "" {
-		patch = "—"
-	}
 	who := "campeones"
 	if s.Game == model.GameDeadlock {
 		who = "héroes"
 	}
+	// En el pie no hay ancho disponible: se usa la etiqueta corta de
+	// catálogo y se mantienen los dos recuentos, que son el dato útil.
+	patch := footerPatchLabel(patchProvenance{CatalogPatch: s.Version}, false)
 	line := fmt.Sprintf("%s · %s · %d %s · %d builds", src, patch, len(s.Champions), who, len(s.Builds))
 	line += freshnessNote(s)
 	if s.Omitted > 0 {
@@ -1572,4 +1701,213 @@ func humanAge(d time.Duration) string {
 		return fmt.Sprintf("%d min", int(d.Minutes()))
 	}
 	return "un momento"
+}
+
+// ─── estado de los iconos de Ruta/Alt. ─────────────────────────────
+//
+// IDENTIDAD DEL RECURSO: lo que se descarga es
+//
+//	{base}/cdn/{parche}/img/item/{id}.png
+//
+// (ver ddragon.ItemIcon). Esa URL NO depende de las columnas ni del modo
+// de render: 3, 4 y 6 columnas piden EXACTAMENTE el mismo PNG y lo único
+// que cambia es cómo se representa después. Por tanto:
+//
+//   - La caché de arte RENDERIZADO (ItemArt) sí distingue columnas y
+//     modo: cada combinación produce un string distinto.
+//   - La caché de FALLOS NO puede distinguirlos: si el recurso no existe
+//     (404/410), no existe para ningún ancho. Indexarla por artKey hacía
+//     que cambiar de 3 a 6 columnas redescargara el mismo 404.
+//
+// Por eso los fallos se indexan por artResource: proveedor + id + parche.
+
+// artResource identifica el RECURSO descargado, sin nada de la
+// representación. Dos claves de arte con el mismo artResource comparten
+// bytes: si uno falla, el otro también.
+//
+// Por qué NO se indexa por la URL real del recurso:
+//
+//   - La URL de un ítem sí es determinista ({base}/cdn/{v}/img/item/
+//     {id}.png), pero la de una RUNA no: sale del campo `icon` de
+//     runesReforged.json, así que conocerla exige leer y decodificar ese
+//     JSON. Indexar por URL obligaría a resolverla antes de poder
+//     consultar la caché de fallos, es decir, a hacer trabajo (y una
+//     petición la primera vez) solo para saber si hay que hacer una
+//     petición.
+//   - Exponerla requeriría añadir un método a staticdata.Provider, lo
+//     que amplía el alcance más allá de esta auditoría.
+//
+// La tupla de abajo identifica el recurso con la misma precisión
+// práctica sin I/O: origen concreto (no el tipo), tipo de arte, id y
+// parche.
+type artResource struct {
+	// Origin identifica la INSTANCIA del proveedor, no su tipo. Dos
+	// clientes del mismo tipo con distinto baseURL son orígenes
+	// distintos y no deben compartir fallos.
+	Origin string
+	// Kind separa ítem de runa: sus IDs viven en espacios distintos y
+	// pueden coincidir numéricamente. Sin esto, un 404 de ítem
+	// bloqueaba la runa con el mismo id.
+	Kind  artKind
+	ID    int
+	Patch string
+}
+
+// artFailure explica por qué un recurso no produjo arte.
+//
+// La distinción es funcional, no cosmética:
+//
+//   - Un recurso AUSENTE (404/410) no va a aparecer reintentándolo: se
+//     memoriza para no repetir la descarga.
+//   - Un fallo TRANSITORIO (red, timeout, 5xx, 429) puede resolverse
+//     solo: NO se memoriza.
+//   - Un PNG ILEGIBLE tampoco se memoriza. La caché de Data Dragon
+//     guarda el cuerpo con HTTP 200 y TTL largo, así que un truncamiento
+//     no se distingue de una corrupción permanente desde aquí. Bloquearlo
+//     dejaría el icono muerto para siempre; se deja reintentable para que
+//     un intento explícito posterior (cambio de pestaña, de campeón o de
+//     tramo de ancho) pueda recuperarlo si los bytes ya son válidos.
+//
+// No hay temporizadores ni reintentos autónomos: solo se reintenta
+// cuando un evento de usuario relanza la precarga.
+type artFailure uint8
+
+const (
+	// artFailNone: no hay fallo registrado.
+	artFailNone artFailure = iota
+	// artFailMissing: el CDN responde 404/410 para ese recurso.
+	artFailMissing
+	// artFailCorrupt: el cuerpo no se pudo decodificar como PNG. NO se
+	// memoriza (ver el comentario de arriba).
+	artFailCorrupt
+	// artFailTransient: red, timeout, 5xx o proveedor sin datos.
+	artFailTransient
+)
+
+// classifyArtError traduce un error del proveedor a su clase.
+//
+// Debe seguir siendo válido para cualquier staticdata.Provider: los que
+// no exponen un tipo concreto (Deadlock, fixtures) caen en transitorio,
+// que es la opción conservadora (permite recuperarse).
+func classifyArtError(err error) artFailure {
+	if err == nil {
+		return artFailNone
+	}
+	if ddragon.IsNotFound(err) {
+		return artFailMissing
+	}
+	// El validador de la caché rechazó el cuerpo: es un fallo del
+	// CONTENIDO, no de la red. Se trata como corrupto (no memorizable):
+	// si el origen empieza a servir un PNG válido, un intento explícito
+	// posterior debe poder recuperarlo.
+	if errors.Is(err, cache.ErrInvalidBody) {
+		return artFailCorrupt
+	}
+	return artFailTransient
+}
+
+// artDidFail indica si el RECURSO de esa clave tiene un fallo
+// DEFINITIVO registrado. Compartido entre tamaños y modos.
+func (s *Session) artDidFail(key artKey) bool {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	return s.artFailed[s.resourceForLocked(key)] == artFailMissing
+}
+
+// resourceForLocked deriva el recurso de una clave de arte. Quien llama
+// ya tiene el candado.
+func (s *Session) resourceForLocked(key artKey) artResource {
+	return artResource{
+		Origin: providerOrigin(s.Provider),
+		Kind:   key.Kind,
+		ID:     key.ID,
+		Patch:  key.Patch,
+	}
+}
+
+// providerOrigin identifica la INSTANCIA del proveedor.
+//
+// Usa el tipo Y la dirección del valor cuando es un puntero. Solo el
+// tipo no basta: dos clientes del mismo tipo con distinto baseURL
+// compartirían fallos, de modo que un 404 contra un CDN dejaría sin
+// icono el mismo id servido por otro.
+//
+// ALCANCE DE LA IDENTIDAD: vive lo que vive la instancia del proveedor
+// dentro de la sesión. El diseño depende de que cada carga cree sesión y
+// proveedor NUEVOS: LoadSession (app.go) construye una &Session{} con
+// ItemArt, RuneArt y artFailed vacíos y le asigna l.Providers[g], y es la
+// ÚNICA asignación de Provider en producción. Por tanto:
+//
+//   - Un cambio de parche o de juego trae sesión nueva ⇒ mapa de fallos
+//     vacío ⇒ se vuelve a pedir. Correcto.
+//   - Si algún día se reutilizara la sesión cambiando solo Provider, los
+//     fallos de la instancia anterior ya no aplicarían (la dirección es
+//     distinta), que es el comportamiento conservador deseado: un
+//     proveedor nuevo puede tener el icono.
+func providerOrigin(p staticdata.Provider) string {
+	if p == nil {
+		return "none"
+	}
+	tipo := fmt.Sprintf("%T", p)
+	if v := reflect.ValueOf(p); v.Kind() == reflect.Ptr && !v.IsNil() {
+		return fmt.Sprintf("%s@%x", tipo, v.Pointer())
+	}
+	return tipo
+}
+
+// markArtFailed registra un fallo DEFINITIVO para el recurso.
+// Los transitorios y los PNG ilegibles se ignoran a propósito.
+func (s *Session) markArtFailed(key artKey, kind artFailure) {
+	if kind != artFailMissing {
+		return
+	}
+	s.runeArtMu.Lock()
+	defer s.runeArtMu.Unlock()
+	if s.artFailed == nil {
+		s.artFailed = map[artResource]artFailure{}
+	}
+	s.artFailed[s.resourceForLocked(key)] = kind
+}
+
+// pendingKeysFor devuelve todas las claves que esperan el recurso dado.
+//
+// Una sola descarga del recurso debe producir arte para TODAS ellas,
+// cada una con su representación (columnas y modo propios). Sin esto, la
+// deduplicación evitaría la descarga repetida pero dejaría sin icono a
+// los anchos que no fueron el primero en reservar.
+func (s *Session) pendingKeysFor(res artResource) []artKey {
+	s.runeArtMu.RLock()
+	defer s.runeArtMu.RUnlock()
+	var out []artKey
+	for k := range s.pendingKeys {
+		if s.resourceForLocked(k) == res {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// markArtFailedForResource registra el fallo para TODAS las claves que
+// esperan el recurso de key, no solo para key.
+//
+// La descarga es única por recurso: si falla, fallan todas las
+// representaciones que la esperaban. Dejar las demás sin marcar haría que
+// el siguiente evento las volviera a pedir de inmediato.
+func (s *Session) markArtFailedForResource(key artKey, kind artFailure) {
+	s.markArtFailed(key, kind)
+	if kind != artFailMissing {
+		return
+	}
+	res := s.resourceForLocked(key)
+	s.runeArtMu.RLock()
+	var otras []artKey
+	for k := range s.pendingKeys {
+		if k != key && s.resourceForLocked(k) == res {
+			otras = append(otras, k)
+		}
+	}
+	s.runeArtMu.RUnlock()
+	for _, k := range otras {
+		s.markArtFailed(k, kind)
+	}
 }

@@ -125,12 +125,12 @@ func TestRuneArtDeOtroParcheNoSeUsa(t *testing.T) {
 	d.session.InvalidateRuneArt()
 
 	// Se simula una respuesta que llega con el parche VIEJO en la clave.
-	keyViejo := artKey{ID: 8112, Cols: runeArtCols, Mode: artHalfBlock, Patch: "16.22.1"}
+	keyViejo := artKey{ID: 8112, Cols: runeArtColsPorDefecto, Mode: artHalfBlock, Patch: "16.22.1"}
 	d.session.Version = "16.23.1" // el parche cambió mientras se descargaba
 
 	d.session.putArt(keyViejo, "arte-del-parche-viejo")
 
-	if got := d.session.RuneArtFor(8112, runeArtCols); got != "" {
+	if got := d.session.RuneArtFor(8112, runeArtColsPorDefecto); got != "" {
 		t.Errorf("PARCHE se sirvió arte de otro parche: %q", got)
 	}
 	t.Log("PARChE el arte del parche viejo no se usa con el nuevo")

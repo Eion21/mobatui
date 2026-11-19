@@ -529,8 +529,18 @@ func TestAvisoSnowball(t *testing.T) {
 	// El pie envuelve por palabras: colapsar espacios para que la
 	// frase partida en dos líneas siga encontrándose.
 	collapsed := regexp.MustCompile(`\s+`).ReplaceAllString(v, " ")
-	if !strings.Contains(collapsed, "se compra yendo por delante") {
-		t.Error("la línea de detalle no avisa el sesgo de bola de nieve")
+	// La advertencia debe ser PRUDENTE: nombra el sesgo de selección
+	// como posible explicación, no afirma cómo se compró el objeto. La
+	// versión anterior ("se compra yendo por delante") afirmaba un
+	// comportamiento que la muestra agregada no demuestra.
+	if !strings.Contains(collapsed, "WR elevado") {
+		t.Error("la línea de detalle no avisa del WR elevado")
+	}
+	if !strings.Contains(collapsed, "sesgo de selección") {
+		t.Error("la advertencia no nombra el sesgo de selección")
+	}
+	if strings.Contains(collapsed, "se compra yendo por delante") {
+		t.Error("la advertencia sigue afirmando causalidad")
 	}
 }
 

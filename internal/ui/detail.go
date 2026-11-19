@@ -31,12 +31,21 @@ type detailView struct {
 	itemIdx  int  // tarjeta seleccionada (lista plana core+botas)
 	artMode  int  // 0 mini half-block · 1 ASCII color · 2 ASCII mono
 	showItem bool // popup con el detalle de la tarjeta activa
+	// artCols recuerda el ancho de icono con el que se prerenderizó el
+	// arte de Ruta/Alt. Cambiar de tramo de ancho (p.ej. 80 → 118)
+	// invalida el arte ya cargado: el de 3 columnas no debe reutilizarse
+	// en una línea que pide 6. 0 = nunca prerenderizado.
+	artCols int
 	// showUpgrades es el toggle `u`: plegar las tarjetas de mejora y
 	// dejar solo compras nuevas (Deadlock con ruta).
 	showUpgrades bool
 	width        int
-	height       int            // alto de terminal (viewport)
-	vp           viewport.Model // contenido scrolleable
+	height       int // alto de terminal (viewport)
+	// runesMinW es el umbral horizontal de la página de runas activa,
+	// derivado de su contenido. Lo comparten el render y la precarga.
+	runesMinW   int
+	runesMinKey string
+	vp          viewport.Model // contenido scrolleable
 	// scrollAnchor es la tarjeta cuyo scroll ya se fijó: evita que el
 	// auto-scroll pisotee la rueda del ratón entre frames.
 	scrollAnchor int
@@ -991,14 +1000,14 @@ func (d detailView) scrolled() bool {
 }
 
 // compactHeader es la cabecera de una línea para terminales muy bajas:
-// nombre y, si cabe, el parche. Sin retrato ni tendencia.
+// nombre y, si cabe, el parche de DATOS. Sin retrato ni tendencia.
 func (d detailView) compactHeader() string {
 	b := d.CurrentBuild()
 	name := stTitle.Render(d.champ.Name)
 	if b == nil {
 		return name
 	}
-	rest := stDim.Render(" · " + b.Patch)
+	rest := stDim.Render(" · " + compactPatch(b.Patch))
 	if lipgloss.Width(name)+lipgloss.Width(rest) > d.width-2 {
 		return name
 	}
@@ -1025,8 +1034,14 @@ func (d detailView) headerView() string {
 	} else {
 		// El separador final solo se dibuja si hay prioridad de
 		// habilidades: sin ella quedaba un "·" colgando al final.
+		// El parche de la cabecera es el de los DATOS (estadísticas de
+		// partidas), no el del catálogo: las cifras de esta línea salen
+		// de ahí. Si difiere del catálogo se dice explícitamente, para
+		// que no parezca una contradicción con el pie.
+		prov := d.provenance()
 		parts := []string{
-			stDim.Render("Patch " + b.Patch + " · " + nThousand(b.Total.Games) + " partidas · "),
+			stDim.Render(headerPatchLabel(prov, d.width >= 100) + " · " +
+				nThousand(b.Total.Games) + " partidas · "),
 			wrStyle(b.WinRate, b.Total.Games).Render("WR " + pct(b.WinRate)),
 		}
 		if prio := d.priorityLine(); prio != "" {
@@ -1878,9 +1893,16 @@ func wrapName(s string, w int) []string {
 	return []string{first, truncate(strings.Join(words[i:], " "), w)}
 }
 
-// deltaAviso es el delta de WR (puntos) desde el que un ítem huele a
-// sesgo de bola de nieve: con un WR muy por encima del campeón, la
-// muestra viene mayormente de partidas yendo por delante.
+// deltaAviso es el delta de WR (puntos) desde el que un ítem se señala
+// como sospechoso de sesgo de selección.
+//
+// Qué mide de verdad: que el WR del objeto supera al del campeón en 10
+// puntos o más. Eso es todo. NO demuestra que la muestra venga de
+// partidas "yendo por delante", ni que comprar el objeto cause el
+// aumento: un objeto caro y defensivo se compra sobre todo cuando la
+// partida ya va ganada, y el WR agregado recoge esa circunstancia sin
+// poder separarla del efecto propio. El umbral es solo un disparador de
+// aviso, no una prueba (ver biasWarning en uncertainty.go).
 const deltaAviso = 10.0
 
 // snowMark marca con ⚠ los ítems con WR muy por encima del campeón.
@@ -1977,10 +1999,14 @@ func (d detailView) selectionLine() string {
 		stDim.Render(pct(c.item.PickRate)),
 		stDim.Render(nThousand(c.item.Games)))
 	if delta := (c.item.WinRate - d.CurrentBuild().WinRate) * 100; delta >= deltaAviso {
-		line += stDim.Render("  · ⚠ se compra yendo por delante")
+		// Aviso prudente: los datos agregados muestran un WR alto frente
+		// al campeón, pero no prueban CÓMO se compró el objeto. La frase
+		// anterior ("se compra yendo por delante") afirmaba un
+		// comportamiento que la muestra no demuestra.
+		line += stDim.Render("  · " + biasWarning(delta))
 	}
-	if c.item.Games < lowSampleGames {
-		line += stDim.Render("  (muestra baja)")
+	if label := sampleLabel(c.item.Games); label != "" {
+		line += stDim.Render("  (" + label + ")")
 	}
 	return line
 }
@@ -2073,18 +2099,130 @@ func (d detailView) coreTopLine() string {
 // arte. No hace peticiones: el arte se preparó al abrir la pestaña.
 //
 // En terminal estrecha se omite para no desplazar el nombre.
+// runeIconInline devuelve el icono de runa con un espacio final, o "" si
+// no hay arte, no hay sitio o el ancho es estrecho.
+//
+// Las columnas NO son fijas: salen de iconColsFor, los mismos tramos que
+// los ítems (<60 sin icono, 60-99 tres, 100-117 cuatro, >=118 seis).
 func (d detailView) runeIconInline(id int) string {
 	if id <= 0 {
 		return ""
 	}
-	if d.width > 0 && d.width < 60 {
+	cols := d.runeIconCols()
+	if cols == 0 {
 		return ""
 	}
-	icon := d.session.RuneArtFor(id, runeArtCols)
+	icon := d.session.RuneArtFor(id, cols)
 	if icon == "" {
 		return ""
 	}
 	return icon + " "
+}
+
+// runeIconCols devuelve las columnas de icono de runa para esta vista.
+// Sale de runesLayout, la ÚNICA fuente de verdad: el render y la
+// precarga no pueden pedir anchos distintos.
+func (d detailView) runeIconCols() int {
+	d2 := d
+	return d2.runesLayout(d.CurrentBuild()).IconCols
+}
+
+// runePanelChrome es lo que un panel añade a su contenido: borde (2) más
+// padding horizontal (4). Se DERIVA del estilo en vez de escribirse a
+// mano, para que un cambio de padding mueva el umbral con él.
+var runePanelChrome = lipgloss.Width(stPanel.Render("")) - lipgloss.Width("")
+
+// runesPanelsMinWidth es el ancho mínimo para poner dos paneles en
+// horizontal: los dos paneles de contenido más el separador.
+//
+// Se deriva del CONTENIDO REAL de la página de runas: el panel primario
+// (nombres de árbol y runas) y el secundario (más fragmentos y `alt:`).
+// Si el catálogo crece, el umbral sube solo.
+// runesMinWidth devuelve el umbral horizontal de la página activa.
+//
+// Se recalcula solo si cambian la página o el ancho de la caché; el
+// valor vive en la vista y lo lee igual el render que la precarga.
+func (d *detailView) runesMinWidth(b *model.CleanBuild) int {
+	if b == nil || len(b.RunePages) == 0 {
+		return 0
+	}
+	p := b.RunePages[0]
+	clave := fmt.Sprintf("%d/%d/%d", p.KeystoneID, p.PrimaryTree, p.SecondaryTree)
+	if d.runesMinW > 0 && d.runesMinKey == clave {
+		return d.runesMinW
+	}
+	d.runesMinW = d.runesPanelsMinWidth(b)
+	d.runesMinKey = clave
+	return d.runesMinW
+}
+
+func (d detailView) runesPanelsMinWidth(b *model.CleanBuild) int {
+	if b == nil || len(b.RunePages) == 0 {
+		return 0
+	}
+	prim, sec := d.runePanelBodies(b.RunePages[0])
+	return lipgloss.Width(stPanel.Render(prim)) +
+		lipgloss.Width(runePanelSep) +
+		lipgloss.Width(stPanel.Render(sec))
+}
+
+// runeLayout describe cómo pintar la pestaña de Runas a un ancho dado.
+// Es la ÚNICA fuente de verdad del layout: la usan runesView y la
+// precarga (runeIconCols). No debe existir otra ruta que calcule estos
+// valores por separado.
+type runeLayout struct {
+	// Vertical apila árboles y fragmentos en una columna; Horizontal
+	// pone dos paneles lado a lado.
+	Vertical bool
+	// PanelWidth es el ancho disponible para el CONTENIDO de un panel
+	// (sin su borde ni padding). En vertical es uno solo.
+	PanelWidth int
+	// IconCols son las columnas del icono de runa. Nunca hacen que una
+	// fila exceda el ancho: si no caben, bajan a 0.
+	IconCols int
+}
+
+// runesLayout decide el layout para width columnas.
+//
+// El umbral horizontal NO es un número elegido a mano: es el ancho real
+// que ocupan los dos paneles con el contenido de ESTA página. Por debajo,
+// dos paneles no caben y se apila en vertical.
+//
+// Se usa el máximo entre el umbral de la página actual y el mínimo
+// estructural (un panel con su borde), para que el modo vertical siempre
+// tenga algo de sitio.
+func (d detailView) runesLayout(b *model.CleanBuild) runeLayout {
+	width := d.width
+	cols := iconColsFor(width)
+	if width <= 0 {
+		// Ancho desconocido (cmd/render, pruebas): el conservador.
+		return runeLayout{Vertical: true, PanelWidth: artMinWidth, IconCols: cols}
+	}
+	minH := d.runesMinWidth(b)
+	if width < minH {
+		// Vertical: un panel que ocupa todo el ancho.
+		pw := width - runePanelChrome
+		if pw < 1 {
+			pw = 1
+		}
+		// Un icono ocupa su ancho más el espacio final; si no cabe en el
+		// panel, esa fila va sin icono antes que desbordar.
+		if cols > 0 && cols+1 > pw {
+			cols = 0
+		}
+		return runeLayout{Vertical: true, PanelWidth: pw, IconCols: cols}
+	}
+	// Horizontal: dos paneles. Cada uno se queda con su contenido; el
+	// ancho se reparte y el icono solo se pinta si cabe en su panel.
+	half := (width - lipgloss.Width(runePanelSep)) / 2
+	pw := half - runePanelChrome
+	if pw < 1 {
+		pw = 1
+	}
+	if cols > 0 && cols+1 > pw {
+		cols = 0
+	}
+	return runeLayout{Vertical: false, PanelWidth: pw, IconCols: cols}
 }
 
 // routeFreshness decide si una ruta merece aviso de antigüedad.
@@ -2185,51 +2323,170 @@ func (d detailView) matchupsView() string {
 
 // ─── pestaña runas ─────────────────────────────────────────────────
 
-// runesView: keystone protagonista, resto en dos columnas (árbol
-// primario / secundario + fragmentos) y la alternativa al pie.
+// runePanelSep separa los dos paneles en el modo horizontal.
+var runePanelSep = "  "
+
+// runesView: keystone protagonista, árboles y fragmentos, y la
+// alternativa al pie. El formato sale de runesLayout:
+//
+//	vertical    una columna: keystone, resumen, primario, secundario,
+//	            fragmentos y alt:, todo envuelto al ancho del panel
+//	horizontal  dos paneles lado a lado
+//
+// Regla de información: a ningún ancho se pierde nada. Keystone, ambos
+// árboles, fragmentos, alt:, WR y partidas están SIEMPRE. Donde antes se
+// cortaba el árbol secundario (<94), ahora se apila.
+//
+// El scroll corre por cuenta del viewport (detail.go:836, sync →
+// d.vp.SetContent), así que aquí no se oculta nada por altura.
 func (d detailView) runesView() string {
 	b := d.CurrentBuild()
 	if len(b.RunePages) == 0 {
 		return stDim.Render("sin runas con muestra suficiente")
 	}
 	p := b.RunePages[0]
-	// La keystone es la runa más identificativa: lleva icono siempre que
-	// exista recurso, y su nombre textual se conserva.
+	lay := d.runesLayout(b)
+	pw := lay.PanelWidth
+
+	// Cabecera: keystone y resumen, envueltos al ancho disponible.
 	head := lipgloss.JoinVertical(lipgloss.Left,
 		stSection.Render("◆ "+d.runeIconInline(p.KeystoneID)+d.session.RuneName(p.KeystoneID)),
-		stDim.Render(fmt.Sprintf("%s / %s · WR %s · %s partidas",
-			stValue.Render(d.session.TreeName(p.PrimaryTree)),
-			stValue.Render(d.session.TreeName(p.SecondaryTree)),
-			wrStyle(p.WinRate, p.Games).Render(pct(p.WinRate)),
-			nThousand(p.Games),
-		)))
-	bullet := func(ids []int) []string {
-		out := make([]string, 0, len(ids))
-		for _, id := range ids {
-			out = append(out, "• "+d.runeIconInline(id)+d.session.RuneName(id))
+		stDim.Render(d.runeSummary(p)),
+	)
+	head = wrapANSI(head, d.width)
+
+	prim, sec := d.runePanelBodies(p)
+	alt := d.runeAltLine(b)
+
+	if lay.Vertical {
+		parts := []string{head, "", wrapANSI(prim, pw), "", wrapANSI(sec, pw)}
+		if alt != "" {
+			parts = append(parts, "", wrapANSI(alt, pw))
 		}
-		return out
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
-	prim := lipgloss.JoinVertical(lipgloss.Left, append([]string{
-		stValue.Render(d.session.TreeName(p.PrimaryTree))}, bullet(p.PrimaryIDs)...)...)
-	secLines := append([]string{stValue.Render(d.session.TreeName(p.SecondaryTree))},
-		bullet(p.SecondaryIDs)...)
-	shards := make([]string, 0, len(p.Shards))
-	for _, id := range p.Shards {
-		shards = append(shards, d.session.ShardName(id))
-	}
-	secLines = append(secLines, "", stDim.Render("fragmentos: "+strings.Join(shards, " · ")))
-	sec := lipgloss.JoinVertical(lipgloss.Left, secLines...)
+
+	// Horizontal: los fragmentos van al pie del panel secundario.
 	cols := lipgloss.JoinHorizontal(lipgloss.Top,
-		stPanel.Render(prim), "  ", stPanel.Render(sec))
-	out := lipgloss.JoinVertical(lipgloss.Left, head, "", cols)
-	if len(b.RunePages) > 1 {
-		alt := b.RunePages[1]
-		out = lipgloss.JoinVertical(lipgloss.Left, out,
-			stDim.Render(fmt.Sprintf("alt: %s (%s partidas)",
-				d.session.RuneName(alt.KeystoneID), nThousand(alt.Games))))
+		stPanel.Render(prim), runePanelSep, stPanel.Render(sec))
+	parts := []string{head, "", cols}
+	if alt != "" {
+		parts = append(parts, "", alt)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// runePanelBodies devuelve el contenido de los dos paneles: primario
+// (ÁRBOL + sus runas) y secundario (ÁRBOL + sus runas + fragmentos).
+//
+// Está separado de runesView para poder MEDIR su ancho: el umbral del
+// modo horizontal se deriva de aquí, no de una constante escrita a mano.
+func (d detailView) runePanelBodies(p model.RankedRunePage) (prim, sec string) {
+	// SIN iconos a propósito: medir el umbral con arte descargado haría
+	// que el propio umbral dependiera del arte (y runeIconInline volvería
+	// a llamar a runesLayout, con recursión infinita). El umbral se
+	// calcula con los nombres, que es lo que siempre está.
+	prim = lipgloss.JoinVertical(lipgloss.Left, append([]string{
+		stValue.Render(d.session.TreeName(p.PrimaryTree))}, d.runeBulletsSinIcono(p.PrimaryIDs)...)...)
+	sec = lipgloss.JoinVertical(lipgloss.Left, append([]string{
+		stValue.Render(d.session.TreeName(p.SecondaryTree))}, d.runeBulletsSinIcono(p.SecondaryIDs)...)...)
+	if shards := d.runeShardsLine(p); shards != "" {
+		sec = lipgloss.JoinVertical(lipgloss.Left, sec, "", shards)
+	}
+	return prim, sec
+}
+
+// runeSummary compone la línea de resumen: árboles, WR y partidas. Se
+// parte en varias líneas si el ancho no la admite entera.
+func (d detailView) runeSummary(p model.RankedRunePage) string {
+	return fmt.Sprintf("%s / %s · WR %s · %s partidas",
+		stValue.Render(d.session.TreeName(p.PrimaryTree)),
+		stValue.Render(d.session.TreeName(p.SecondaryTree)),
+		wrStyle(p.WinRate, p.Games).Render(pct(p.WinRate)),
+		nThousand(p.Games),
+	)
+}
+
+// runeBulletsSinIcono devuelve una entrada por runa sin icono: se usa
+// para MEDIR el ancho del panel, donde el arte no debe influir.
+func (d detailView) runeBulletsSinIcono(ids []int) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, "• "+d.session.RuneName(id))
 	}
 	return out
+}
+
+// runeBullets devuelve una entrada por runa, con su icono si cabe.
+func (d detailView) runeBullets(ids []int) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, "• "+d.runeIconInline(id)+d.session.RuneName(id))
+	}
+	return out
+}
+
+// runeShardsLine devuelve la línea de fragmentos, o "" si la página no
+// los declara.
+func (d detailView) runeShardsLine(p model.RankedRunePage) string {
+	if len(p.Shards) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(p.Shards))
+	for _, id := range p.Shards {
+		if n := d.session.ShardName(id); n != "" {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return stDim.Render("fragmentos: " + strings.Join(names, " · "))
+}
+
+// runeAltLine devuelve la alternativa al pie, o "" si solo hay una.
+func (d detailView) runeAltLine(b *model.CleanBuild) string {
+	if len(b.RunePages) < 2 {
+		return ""
+	}
+	alt := b.RunePages[1]
+	return stDim.Render(fmt.Sprintf("alt: %s (%s partidas)",
+		d.session.RuneName(alt.KeystoneID), nThousand(alt.Games)))
+}
+
+// wrapANSI parte una cadena ANSI por palabras para que ninguna línea
+// visible exceda width columnas. Es necesario a <60: el valor de
+// `TreeName` o el nombre de una runa puede no caber.
+func wrapANSI(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	// Se parte por palabras conservando los estilos: al recomponer con
+	// "\n" cada línea arrastra el estilo que tenía.
+	// lipgloss.Width ignora los códigos ANSI, así que si ya cabe no se
+	// toca: partir por palabras rompería los estilos por la mitad.
+	palabras := strings.Fields(s)
+	if len(palabras) == 0 {
+		return s
+	}
+	var out []string
+	actual := ""
+	for _, w := range palabras {
+		if actual == "" {
+			actual = w
+			continue
+		}
+		if lipgloss.Width(actual)+1+lipgloss.Width(w) <= width {
+			actual += " " + w
+			continue
+		}
+		out = append(out, actual)
+		actual = w
+	}
+	if actual != "" {
+		out = append(out, actual)
+	}
+	return strings.Join(out, "\n")
 }
 
 // emptySkillsReason distingue POR QUÉ no hay rejilla de habilidades:
@@ -2484,23 +2741,46 @@ func (d detailView) itemPopup() string {
 		tag += stDim.Render(fmt.Sprintf(" · ↗ %d%% la mejoran", int(c.upgradedRate*100+0.5)))
 	}
 	b := d.CurrentBuild()
+	// El WR va con su banda de Wilson, y la banda se explica aparte:
+	// es error de MUESTREO, no una probabilidad de ganar comprando el
+	// objeto ni una corrección del sesgo de selección.
+	wilson := ""
+	if band := wilsonBand(fmtStats{Games: it.Games, Wins: it.Wins}); band != "" {
+		wilson = fmt.Sprintf("  (Wilson 95%%: %s)", band)
+	}
 	lines := []string{
 		name + tag,
 		"",
-		fmt.Sprintf("  WR        %s   (límite Wilson 95%%: %s)",
-			wrStyle(it.WinRate, it.Games).Render(pct(it.WinRate)),
-			wrStyle(it.Wilson, it.Games).Render(pct(it.Wilson))),
+		fmt.Sprintf("  WR        %s%s",
+			wrStyle(it.WinRate, it.Games).Render(pct(it.WinRate)), wilson),
 		fmt.Sprintf("  pick      %s", stDim.Render(pct(it.PickRate))),
-		fmt.Sprintf("  muestra   %s partidas", stDim.Render(nThousand(it.Games))),
+		fmt.Sprintf("  muestra   %s partidas · evidencia %s",
+			stDim.Render(nThousand(it.Games)),
+			stDim.Render(evidenceWord(it.Games))),
 		"",
-		stDim.Render(fmt.Sprintf("  build: %s · %s · patch %s · fuente %s",
-			d.champ.Name, b.Role, b.Patch, b.Source)),
+	}
+	// Procedencia en dos líneas: separa el contexto (campeón/rol/fuente)
+	// de las dos identidades de parche, que es lo que el jugador necesita
+	// distinguir.
+	for _, l := range provenanceLines(d.provenance(), string(b.Role), b.Source, d.champ.Name) {
+		lines = append(lines, stDim.Render(l))
+	}
+	// Explicación de la banda y del tramo de muestra: solo cuando hay
+	// algo que explicar (sin muestra no hay banda que matizar).
+	if wilson != "" {
+		lines = append(lines, "", stDim.Render("  "+wilsonCaveat()))
+	}
+	if explain := uncertaintyExplanation(it.Games); explain != "" {
+		lines = append(lines, stDim.Render("  "+explain))
 	}
 	if d.session.Game == model.GameDeadlock {
 		delta := (it.WinRate - b.WinRate) * 100
 		lines = append(lines, fmt.Sprintf("  Δ WR      %+.1f puntos vs. héroe", delta))
 		if delta >= deltaAviso {
-			lines = append(lines, "  ⚠ se compra yendo por delante")
+			// Advertencia breve arriba y explicación abajo: el popup es
+			// el sitio donde cabe decir que el dato NO es causal.
+			lines = append(lines, stDim.Render("  "+biasWarning(delta)))
+			lines = append(lines, stDim.Render("  "+biasExplanation()))
 		}
 	}
 	// Ruta de compra: orden, posición en la secuencia y patrimonio
@@ -2554,9 +2834,6 @@ func (d detailView) itemPopup() string {
 					stValue.Render(info.Description)),
 			}, lines[6:]...)...)
 		}
-	}
-	if it.Games < lowSampleGames {
-		lines = append(lines, "", stWinrateBad.Render("  ⚠ muestra baja: el WR puede no ser fiable"))
 	}
 	lines = append(lines, "", stDim.Render("esc cierra"))
 	boxW := min(56, max(30, d.width-6))
