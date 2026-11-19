@@ -56,13 +56,15 @@ func TestRunasNoDesbordaA30y40(t *testing.T) {
 // TestRunasArbolSecundarioEnEstrecho: a <60 el árbol secundario debe
 // verse ENTERO (en 3a633af el borde lo cortaba), con todas sus runas.
 func TestRunasArbolSecundarioEnEstrecho(t *testing.T) {
-	for _, w := range []int{30, 40, 59} {
+	for _, w := range []int{30, 40, 59, 60, 89} {
 		d := runeDetailView(t, w, 60)
 		cb := d.CurrentBuild()
 		if cb == nil || len(cb.RunePages) == 0 {
 			t.Skip("sin runas")
 		}
-		out := stripANSIStr(d.View())
+		// Se lee el CONTENIDO, no View(): el viewport recorta a 30 y la
+		// prueba debe juzgar lo que produce runesView.
+		out := stripANSIStr(d.runesView())
 		p := cb.RunePages[0]
 		if !strings.Contains(out, d.session.TreeName(p.SecondaryTree)) {
 			t.Errorf("ancho %d: falta el árbol secundario", w)
@@ -214,7 +216,7 @@ func TestRunasLayoutVerticalAEStrecho(t *testing.T) {
 		}
 		return max
 	}
-	for _, w := range []int{30, 40, 59} {
+	for _, w := range []int{30, 40, 59, 60, 89} {
 		d := runeDetailView(t, w, 60)
 		if cb := d.CurrentBuild(); cb == nil || len(cb.RunePages) == 0 {
 			t.Skip("sin runas")
@@ -223,12 +225,16 @@ func TestRunasLayoutVerticalAEStrecho(t *testing.T) {
 			t.Errorf("ancho %d: una sola columna, se vieron %d paneles", w, n)
 		}
 	}
-	for _, w := range []int{60, 100, 160} {
-		d := runeDetailView(t, w, 60)
+	// El umbral ya no es un número fijo: se pregunta al layout.
+	d0 := runeDetailView(t, 200, 60)
+	umbral := d0.runesMinWidth(d0.CurrentBuild())
+	for _, w := range []int{umbral, 118, 160} {
+		d := runeDetailView(t, max(w, 24), 60)
+		d.width = w
 		if cb := d.CurrentBuild(); cb == nil || len(cb.RunePages) == 0 {
 			t.Skip("sin runas")
 		}
-		if n := maxBordes(stripANSIStr(d.View())); n < 2 {
+		if n := maxBordes(stripANSIStr(d.runesView())); n < 2 {
 			t.Errorf("ancho %d: debían verse 2 paneles, se vieron %d", w, n)
 		}
 	}

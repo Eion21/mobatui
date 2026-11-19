@@ -40,8 +40,12 @@ type detailView struct {
 	// dejar solo compras nuevas (Deadlock con ruta).
 	showUpgrades bool
 	width        int
-	height       int            // alto de terminal (viewport)
-	vp           viewport.Model // contenido scrolleable
+	height       int // alto de terminal (viewport)
+	// runesMinW es el umbral horizontal de la página de runas activa,
+	// derivado de su contenido. Lo comparten el render y la precarga.
+	runesMinW   int
+	runesMinKey string
+	vp          viewport.Model // contenido scrolleable
 	// scrollAnchor es la tarjeta cuyo scroll ya se fijó: evita que el
 	// auto-scroll pisotee la rueda del ratón entre frames.
 	scrollAnchor int
@@ -2104,7 +2108,7 @@ func (d detailView) runeIconInline(id int) string {
 	if id <= 0 {
 		return ""
 	}
-	cols := iconColsFor(d.width)
+	cols := d.runeIconCols()
 	if cols == 0 {
 		return ""
 	}
@@ -2116,10 +2120,109 @@ func (d detailView) runeIconInline(id int) string {
 }
 
 // runeIconCols devuelve las columnas de icono de runa para esta vista.
-// Es la MISMA función que la de ítems a propósito: si divergieran, el
-// arte se precargaría con un ancho que nadie pinta.
+// Sale de runesLayout, la ÚNICA fuente de verdad: el render y la
+// precarga no pueden pedir anchos distintos.
 func (d detailView) runeIconCols() int {
-	return iconColsFor(d.width)
+	d2 := d
+	return d2.runesLayout(d.CurrentBuild()).IconCols
+}
+
+// runePanelChrome es lo que un panel añade a su contenido: borde (2) más
+// padding horizontal (4). Se DERIVA del estilo en vez de escribirse a
+// mano, para que un cambio de padding mueva el umbral con él.
+var runePanelChrome = lipgloss.Width(stPanel.Render("")) - lipgloss.Width("")
+
+// runesPanelsMinWidth es el ancho mínimo para poner dos paneles en
+// horizontal: los dos paneles de contenido más el separador.
+//
+// Se deriva del CONTENIDO REAL de la página de runas: el panel primario
+// (nombres de árbol y runas) y el secundario (más fragmentos y `alt:`).
+// Si el catálogo crece, el umbral sube solo.
+// runesMinWidth devuelve el umbral horizontal de la página activa.
+//
+// Se recalcula solo si cambian la página o el ancho de la caché; el
+// valor vive en la vista y lo lee igual el render que la precarga.
+func (d *detailView) runesMinWidth(b *model.CleanBuild) int {
+	if b == nil || len(b.RunePages) == 0 {
+		return 0
+	}
+	p := b.RunePages[0]
+	clave := fmt.Sprintf("%d/%d/%d", p.KeystoneID, p.PrimaryTree, p.SecondaryTree)
+	if d.runesMinW > 0 && d.runesMinKey == clave {
+		return d.runesMinW
+	}
+	d.runesMinW = d.runesPanelsMinWidth(b)
+	d.runesMinKey = clave
+	return d.runesMinW
+}
+
+func (d detailView) runesPanelsMinWidth(b *model.CleanBuild) int {
+	if b == nil || len(b.RunePages) == 0 {
+		return 0
+	}
+	prim, sec := d.runePanelBodies(b.RunePages[0])
+	return lipgloss.Width(stPanel.Render(prim)) +
+		lipgloss.Width(runePanelSep) +
+		lipgloss.Width(stPanel.Render(sec))
+}
+
+// runeLayout describe cómo pintar la pestaña de Runas a un ancho dado.
+// Es la ÚNICA fuente de verdad del layout: la usan runesView y la
+// precarga (runeIconCols). No debe existir otra ruta que calcule estos
+// valores por separado.
+type runeLayout struct {
+	// Vertical apila árboles y fragmentos en una columna; Horizontal
+	// pone dos paneles lado a lado.
+	Vertical bool
+	// PanelWidth es el ancho disponible para el CONTENIDO de un panel
+	// (sin su borde ni padding). En vertical es uno solo.
+	PanelWidth int
+	// IconCols son las columnas del icono de runa. Nunca hacen que una
+	// fila exceda el ancho: si no caben, bajan a 0.
+	IconCols int
+}
+
+// runesLayout decide el layout para width columnas.
+//
+// El umbral horizontal NO es un número elegido a mano: es el ancho real
+// que ocupan los dos paneles con el contenido de ESTA página. Por debajo,
+// dos paneles no caben y se apila en vertical.
+//
+// Se usa el máximo entre el umbral de la página actual y el mínimo
+// estructural (un panel con su borde), para que el modo vertical siempre
+// tenga algo de sitio.
+func (d detailView) runesLayout(b *model.CleanBuild) runeLayout {
+	width := d.width
+	cols := iconColsFor(width)
+	if width <= 0 {
+		// Ancho desconocido (cmd/render, pruebas): el conservador.
+		return runeLayout{Vertical: true, PanelWidth: artMinWidth, IconCols: cols}
+	}
+	minH := d.runesMinWidth(b)
+	if width < minH {
+		// Vertical: un panel que ocupa todo el ancho.
+		pw := width - runePanelChrome
+		if pw < 1 {
+			pw = 1
+		}
+		// Un icono ocupa su ancho más el espacio final; si no cabe en el
+		// panel, esa fila va sin icono antes que desbordar.
+		if cols > 0 && cols+1 > pw {
+			cols = 0
+		}
+		return runeLayout{Vertical: true, PanelWidth: pw, IconCols: cols}
+	}
+	// Horizontal: dos paneles. Cada uno se queda con su contenido; el
+	// ancho se reparte y el icono solo se pinta si cabe en su panel.
+	half := (width - lipgloss.Width(runePanelSep)) / 2
+	pw := half - runePanelChrome
+	if pw < 1 {
+		pw = 1
+	}
+	if cols > 0 && cols+1 > pw {
+		cols = 0
+	}
+	return runeLayout{Vertical: false, PanelWidth: pw, IconCols: cols}
 }
 
 // routeFreshness decide si una ruta merece aviso de antigüedad.
@@ -2220,16 +2323,19 @@ func (d detailView) matchupsView() string {
 
 // ─── pestaña runas ─────────────────────────────────────────────────
 
+// runePanelSep separa los dos paneles en el modo horizontal.
+var runePanelSep = "  "
+
 // runesView: keystone protagonista, árboles y fragmentos, y la
-// alternativa al pie. El formato es ADAPTABLE al ancho:
+// alternativa al pie. El formato sale de runesLayout:
 //
-//	<60   un solo panel, apilado en vertical, sin iconos
-//	>=60  dos paneles en horizontal, con iconos según iconColsFor
+//	vertical    una columna: keystone, resumen, primario, secundario,
+//	            fragmentos y alt:, todo envuelto al ancho del panel
+//	horizontal  dos paneles lado a lado
 //
-// Regla de información: nada que se viera antes en un ancho puede
-// desaparecer. A <60 hoy se perdían el árbol secundario y los fragmentos
-// porque el borde del viewport cortaba el segundo panel; apilando en
-// vertical se ven todos.
+// Regla de información: a ningún ancho se pierde nada. Keystone, ambos
+// árboles, fragmentos, alt:, WR y partidas están SIEMPRE. Donde antes se
+// cortaba el árbol secundario (<94), ahora se apila.
 //
 // El scroll corre por cuenta del viewport (detail.go:836, sync →
 // d.vp.SetContent), así que aquí no se oculta nada por altura.
@@ -2239,50 +2345,55 @@ func (d detailView) runesView() string {
 		return stDim.Render("sin runas con muestra suficiente")
 	}
 	p := b.RunePages[0]
+	lay := d.runesLayout(b)
+	pw := lay.PanelWidth
 
-	// Cabecera: keystone y el resumen de árboles/WR/muestra. Es lo
-	// único que se muestra en TODOS los anchos.
+	// Cabecera: keystone y resumen, envueltos al ancho disponible.
 	head := lipgloss.JoinVertical(lipgloss.Left,
 		stSection.Render("◆ "+d.runeIconInline(p.KeystoneID)+d.session.RuneName(p.KeystoneID)),
 		stDim.Render(d.runeSummary(p)),
 	)
+	head = wrapANSI(head, d.width)
 
-	prim := lipgloss.JoinVertical(lipgloss.Left, append([]string{
-		stValue.Render(d.session.TreeName(p.PrimaryTree))}, d.runeBullets(p.PrimaryIDs)...)...)
-	sec := lipgloss.JoinVertical(lipgloss.Left, append([]string{
-		stValue.Render(d.session.TreeName(p.SecondaryTree))}, d.runeBullets(p.SecondaryIDs)...)...)
+	prim, sec := d.runePanelBodies(p)
 	alt := d.runeAltLine(b)
 
-	// Terminal estrecho: una sola columna. En vertical no hay borde que
-	// corte el segundo panel.
-	if d.width > 0 && d.width < artMinWidth {
-		parts := []string{head, "", wrapANSI(prim, d.width), "", wrapANSI(sec, d.width)}
-		// Los fragmentos se pintaban en el panel secundario y a <60 el
-		// borde los cortaba: sin esta línea se PERDERÍAN respecto a
-		// 3a633af en la banda 59, que es justo lo prohibido.
-		if shards := d.runeShardsLine(p); shards != "" {
-			parts = append(parts, "", wrapANSI(shards, d.width))
-		}
+	if lay.Vertical {
+		parts := []string{head, "", wrapANSI(prim, pw), "", wrapANSI(sec, pw)}
 		if alt != "" {
-			parts = append(parts, "", alt)
+			parts = append(parts, "", wrapANSI(alt, pw))
 		}
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
 
-	// Ancho suficiente: dos paneles. Los fragmentos van al pie del
-	// secundario dentro de su panel, para no empujar la línea del `alt:`
-	// fuera del viewport.
-	shards := d.runeShardsLine(p)
-	if shards != "" {
-		sec = lipgloss.JoinVertical(lipgloss.Left, sec, "", shards)
-	}
+	// Horizontal: los fragmentos van al pie del panel secundario.
 	cols := lipgloss.JoinHorizontal(lipgloss.Top,
-		stPanel.Render(prim), "  ", stPanel.Render(sec))
+		stPanel.Render(prim), runePanelSep, stPanel.Render(sec))
 	parts := []string{head, "", cols}
 	if alt != "" {
 		parts = append(parts, "", alt)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// runePanelBodies devuelve el contenido de los dos paneles: primario
+// (ÁRBOL + sus runas) y secundario (ÁRBOL + sus runas + fragmentos).
+//
+// Está separado de runesView para poder MEDIR su ancho: el umbral del
+// modo horizontal se deriva de aquí, no de una constante escrita a mano.
+func (d detailView) runePanelBodies(p model.RankedRunePage) (prim, sec string) {
+	// SIN iconos a propósito: medir el umbral con arte descargado haría
+	// que el propio umbral dependiera del arte (y runeIconInline volvería
+	// a llamar a runesLayout, con recursión infinita). El umbral se
+	// calcula con los nombres, que es lo que siempre está.
+	prim = lipgloss.JoinVertical(lipgloss.Left, append([]string{
+		stValue.Render(d.session.TreeName(p.PrimaryTree))}, d.runeBulletsSinIcono(p.PrimaryIDs)...)...)
+	sec = lipgloss.JoinVertical(lipgloss.Left, append([]string{
+		stValue.Render(d.session.TreeName(p.SecondaryTree))}, d.runeBulletsSinIcono(p.SecondaryIDs)...)...)
+	if shards := d.runeShardsLine(p); shards != "" {
+		sec = lipgloss.JoinVertical(lipgloss.Left, sec, "", shards)
+	}
+	return prim, sec
 }
 
 // runeSummary compone la línea de resumen: árboles, WR y partidas. Se
@@ -2294,6 +2405,16 @@ func (d detailView) runeSummary(p model.RankedRunePage) string {
 		wrStyle(p.WinRate, p.Games).Render(pct(p.WinRate)),
 		nThousand(p.Games),
 	)
+}
+
+// runeBulletsSinIcono devuelve una entrada por runa sin icono: se usa
+// para MEDIR el ancho del panel, donde el arte no debe influir.
+func (d detailView) runeBulletsSinIcono(ids []int) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, "• "+d.session.RuneName(id))
+	}
+	return out
 }
 
 // runeBullets devuelve una entrada por runa, con su icono si cabe.

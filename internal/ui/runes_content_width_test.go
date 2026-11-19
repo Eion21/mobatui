@@ -1,27 +1,27 @@
 package ui
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-
+	"errors"
 	"github.com/Eion21/mobatui/internal/staticdata"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ─── ancho del CONTENIDO de Runas antes del viewport ──────────────
 //
-// La prueba de desbordamiento previa medía d.View(), donde el viewport
-// ya recorta: así ninguna línea "desborda" aunque el contenido real no
-// quepa. Esta mide runesView() tal cual sale, con iconos reales, y es
-// la que revela cuánto ocupa de verdad.
+// La prueba de desbordamiento anterior medía d.View(), donde el viewport
+// ya recorta: ninguna línea "desbordaba" aunque el contenido real no
+// cupiera. Esta mide runesView() tal cual sale, con iconos reales, y con
+// lipgloss.Width (nunca bytes: los iconos son secuencias ANSI).
 
 // vistaRunasConIconos prepara la vista con el fixture de
 // TestRunasConIconosReales: iconos de runa reales para esa página.
 func vistaRunasConIconos(t *testing.T, width int) detailView {
 	t.Helper()
-	d := runeDetailView(t, width, 60)
+	d := runeDetailView(t, max(width, 24), 60)
+	d.width = width
 	cb := d.CurrentBuild()
 	if cb == nil || len(cb.RunePages) == 0 {
 		t.Skip("sin runas en los fixtures")
@@ -37,21 +37,18 @@ func vistaRunasConIconos(t *testing.T, width int) detailView {
 	return d
 }
 
-// TestRunasContenidoNoExcedeElAncho mide runesView() ANTES del
-// viewport, línea por línea, con lipgloss.Width (nunca bytes: los
-// iconos son secuencias ANSI).
+// anchosBarrido es TODO el rango exigible.
 //
-// El contenido tiene dos formatos: apilado (<60) y dos paneles (>=60).
-// El apilado envuelve cada línea a d.width, así que cabe por
-// construcción. Los dos paneles tienen un ancho MÍNIMO propio (94
-// columnas medidas), y por debajo de él el contenido no cabe: el
-// viewport lo recorta. Esos anchos se excluyen aquí y se cubren en
-// TestRunasPanelesCabenDesde94, que fija el umbral con una prueba en vez
-// de con un número inventado.
+// Piso: 24 columnas. Por debajo, el viewport no puede mostrar la pestaña
+// (d.vp.Width = max(24, width-4) en runeDetailView) y el contenido no
+// tiene sitio físico para envolverse; no es un ancho de terminal real.
+const anchoMinRunas = 24
+const anchoMaxRunas = 200
+
+// TestRunasContenidoNoExcedeElAncho barre TODOS los anchos de 24 a 200
+// midiendo runesView() antes del viewport. Ninguna línea puede exceder.
 func TestRunasContenidoNoExcedeElAncho(t *testing.T) {
-	// Anchos donde el formato es de dos paneles y el contenido cabe.
-	anchos := []int{94, 99, 100, 117, 118, 160, 200}
-	for _, w := range anchos {
+	for w := anchoMinRunas; w <= anchoMaxRunas; w++ {
 		d := vistaRunasConIconos(t, w)
 		var max int
 		var exceden []int
@@ -65,91 +62,86 @@ func TestRunasContenidoNoExcedeElAncho(t *testing.T) {
 			}
 		}
 		if len(exceden) > 0 {
-			t.Errorf("ancho %d: %d líneas exceden (máx %d); índices %v",
+			t.Fatalf("ancho %d: %d líneas exceden (máx %d); índices %v",
 				w, len(exceden), max, exceden[:8])
 		}
 	}
-	// Y el formato apilado, que envuelve.
-	for _, w := range []int{30, 40, 59} {
+}
+
+// TestRunasPresenciaEnTodoElBarrido: keystone, ambos árboles,
+// fragmentos, alt:, WR y partidas están SIEMPRE. La tabla esperado de la
+// fase anterior solo puede subir.
+func TestRunasPresenciaEnTodoElBarrido(t *testing.T) {
+	for _, w := range []int{24, 30, 40, 59, 60, 89, 90, 93, 94, 99, 100, 117, 118, 160, 200} {
 		d := vistaRunasConIconos(t, w)
-		max := 0
-		for _, l := range strings.Split(d.runesView(), "\n") {
-			if lw := lipgloss.Width(l); lw > max {
-				max = lw
+		cb := d.CurrentBuild()
+		p := cb.RunePages[0]
+		out := stripANSIStr(d.runesView())
+
+		falta := func(cond bool, que string) {
+			if !cond {
+				t.Errorf("ancho %d: falta %s", w, que)
 			}
 		}
-		// El apilado aún no envuelve la cabecera: se documenta el valor
-		// medido como cota superior, sin fallar por una línea de resumen.
-		if max > artMinWidth {
-			t.Errorf("ancho %d: el apilado mide %d, más que el tramo entero", w, max)
-		}
+		falta(strings.Contains(out, d.session.RuneName(p.KeystoneID)), "la keystone")
+		falta(strings.Contains(out, d.session.TreeName(p.PrimaryTree)), "el árbol primario")
+		falta(strings.Contains(out, d.session.TreeName(p.SecondaryTree)), "el árbol secundario")
+		falta(strings.Contains(out, "fragmentos:"), "los fragmentos")
+		falta(strings.Contains(out, "alt: "), "la alternativa")
+		falta(strings.Contains(out, "WR "), "el win rate")
+		falta(strings.Contains(out, "partidas"), "las partidas")
 	}
 }
 
-// TestRunasPanelesCabenDesde94 fija el umbral medido: con 93 columnas
-// los dos paneles no caben y con 94 sí. Si alguien cambia el contenido
-// de los paneles, esta prueba detecta que el umbral se movió.
-func TestRunasPanelesCabenDesde94(t *testing.T) {
-	maxAncho := func(w int) int {
-		d := vistaRunasConIconos(t, w)
-		max := 0
-		for _, l := range strings.Split(d.runesView(), "\n") {
-			if lw := lipgloss.Width(l); lw > max {
-				max = lw
-			}
+// TestRunasFronteraDelLayout: el modo cambia exactamente en el umbral
+// derivado, no en un número elegido a mano.
+func TestRunasFronteraDelLayout(t *testing.T) {
+	d := runeDetailView(t, 200, 60)
+	b := d.CurrentBuild()
+	if b == nil || len(b.RunePages) == 0 {
+		t.Skip("sin runas")
+	}
+	umbral := d.runesMinWidth(b)
+	if umbral <= 0 {
+		t.Fatal("el umbral debe derivarse del contenido")
+	}
+	for _, w := range []int{umbral - 1, umbral, umbral + 1, 200} {
+		d.width = w
+		lay := d.runesLayout(b)
+		esperaVertical := w < umbral
+		if lay.Vertical != esperaVertical {
+			t.Errorf("ancho %d: vertical=%v, se esperaba %v (umbral %d)",
+				w, lay.Vertical, esperaVertical, umbral)
 		}
-		return max
 	}
-	if got := maxAncho(93); got <= 93 {
-		t.Errorf("a 93 columnas el contenido mide %d: si cabe, el umbral bajó", got)
-	}
-	if got := maxAncho(94); got > 94 {
-		t.Errorf("a 94 columnas el contenido mide %d: ya no cabe, el umbral subió", got)
+	// Y el umbral no es arbitrario: es el ancho real de los dos paneles.
+	if got := d.runesPanelsMinWidth(b); got != umbral {
+		t.Errorf("el umbral cacheado (%d) no coincide con el medido (%d)", umbral, got)
 	}
 }
 
-// TestRunasIconosCabenEnSuTramo comprueba que el icono de runa, a las
-// columnas que pide la vista, no desborda su propia línea.
-//
-// Un icono de N columnas ocupa N en pantalla (el half-block es 1:1 en
-// horizontal). Se mide la DIFERENCIA entre una línea con icono y la
-// misma sin él, no el ancho del texto del icono: las secuencias ANSI
-// hacen que un icono de 3 columnas pueda ocupar 9 bytes visibles.
-func TestRunasIconosCabenEnSuTramo(t *testing.T) {
-	for _, w := range []int{60, 94, 100, 118, 160, 200} {
+// TestRunasColumnasUnaSolaFuente: el ancho que pinta el render es el
+// mismo que pide la precarga, en toda la tabla.
+func TestRunasColumnasUnaSolaFuente(t *testing.T) {
+	for _, w := range []int{24, 30, 40, 59, 60, 89, 90, 93, 94, 99, 100, 117, 118, 160, 200} {
 		d := vistaRunasConIconos(t, w)
-		cols := d.runeIconCols()
-		if cols == 0 {
-			continue
+		b := d.CurrentBuild()
+		render := d.runeIconCols()
+		precarga := d.runesLayout(b).IconCols
+		if render != precarga {
+			t.Errorf("ancho %d: el render pide %d columnas y la precarga %d", w, render, precarga)
 		}
-		p := d.CurrentBuild().RunePages[0]
-
-		// Con la vista actual (iconos visibles) y sin ellos.
-		conIconos := lipgloss.Width(lineaDeRuna(d.runesView(), d.session.RuneName(p.KeystoneID)))
-		d.session.InvalidateRuneArt()
-		d.session.Provider = sinIconosProvider{d.session.Provider}
-		sinIconos := lipgloss.Width(lineaDeRuna(d.runesView(), d.session.RuneName(p.KeystoneID)))
-
-		// El icono se pinta con un espacio final (runeIconInline), así
-		// que su aporte es cols+1 como máximo.
-		if delta := conIconos - sinIconos; delta > cols+1 {
-			t.Errorf("ancho %d: el icono añade %d columnas, el tramo admite %d",
-				w, delta, cols)
-		}
-		// Y las columnas pedidas son EXACTAMENTE las de la tabla de
-		// tramos: un icono más ancho que el tramo desborda el
-		// presupuesto de la línea aunque hoy quepa por holgura.
-		if want := iconColsFor(w); cols != want {
-			t.Errorf("ancho %d: se piden %d columnas de icono, la tabla dice %d",
-				w, cols, want)
+		// El icono pintado no puede añadir más que su ancho + el espacio.
+		linea := lineaDeRuna(d.runesView(), d.session.RuneName(b.RunePages[0].KeystoneID))
+		if lw := lipgloss.Width(linea); lw > w {
+			t.Errorf("ancho %d: la línea del keystone mide %d", w, lw)
 		}
 	}
 }
 
 // lineaDeRuna devuelve la línea que contiene el nombre dado.
 func lineaDeRuna(out, nombre string) string {
-	plana := stripANSIStr(out)
-	for _, l := range strings.Split(plana, "\n") {
+	for _, l := range strings.Split(stripANSIStr(out), "\n") {
 		if strings.Contains(l, nombre) {
 			return l
 		}
