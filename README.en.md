@@ -42,6 +42,13 @@ Built in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [L
 - **Identifiable:** `mobatui --version` reports version, commit, Go and platform. On startup it notifies when a newer GitHub release exists (non-blocking, no self-update); disable with `-no-update-check` or `-offline`.
 - **Match monitor (`m`):** Automatically detects when the game is running and, in League of Legends, identifies your active champion in real time via the *Live Client Data API*.
 
+## What's new in v0.2.2
+
+- **Statistical provenance for recommendations:** every build states which query and which patch its data came from, and distinguishes real sample from local fallback or expired cache. Uncertainty is presented as uncertainty, never as a probability of winning.
+- **Icons that adapt to the terminal width:** text below 60 columns, a 3-column icon from 60 to 99, 4 columns from 100 to 117, and 6 columns from 118.
+- **Adaptive Runes tab:** below 90 columns the trees, shards and alternative stack in a single column; from 90 they are drawn as two panels. Narrowing the window never loses information.
+- **More robust item and rune icons:** a corrupt or truncated PNG is no longer stored in the cache for the long TTL, and in-flight downloads are shared between sizes instead of repeated.
+
 ### Deadlock (via [deadlock-api.com](https://deadlock-api.com))
 - **Hybrid build generator:** Combines per-item statistics with a progression engine that respects upgrade chains, component consumption, and inventory limits.
 - **Phases and context:** Routes split into **EARLY / MID / LATE**, long-game extensions, and **situational** items grouped by purpose (anti-heal, physical/spirit defense, CC resistance, survivability, and extra damage).
@@ -76,6 +83,8 @@ go build -o mobatui .
 
 Cache is stored in the user cache directory (defaults to `~/.cache/mobatui` on Linux) and configuration in `~/.config/mobatui/config.json`. No files are written inside the repository.
 
+> **Package manager notice:** the **WinGet** and **Scoop** manifests (and the Homebrew *cask*) are produced with the v0.2.2 release but are **not published yet** in their repositories. Until they are, install from the archive on the releases page or with `go install`.
+
 ### Available flags
 
 | Flag | Default | Description |
@@ -100,7 +109,7 @@ Cache is stored in the user cache directory (defaults to `~/.cache/mobatui` on L
 | `enter` | Open hero/champion or open selected item detail |
 | `type` | Filter the hero/champion list in real time |
 | `tab` | Change sort criterion in the list / switch tab in detail view |
-| `1`-`4` / `1`-`5` | Jump directly to a tab (`Items`, `Summary`, `Matchups`, `Abilities`) |
+| `1`-`7` | Jump directly to a tab (LoL: `Items`, `Route`, `Alt.`, `Summary`, `Runes`, `Abilities`, `Matchups`; Deadlock: `Items`, `Summary`, `Matchups`, `Abilities`) |
 | `←↑↓→`, `hjkl` | Move selection across cards or rows |
 | `r` / `R` | Force refresh (or rotate role forward/backward in detail view) |
 | `u` | Collapse or expand upgrade cards (Deadlock) |
@@ -109,6 +118,7 @@ Cache is stored in the user cache directory (defaults to `~/.cache/mobatui` on L
 | `a` | Change portrait mode |
 | `m` | Toggle the match monitor |
 | `?` | Show/hide shortcut help |
+| `q` / `ctrl+c` | Quit |
 | `esc` | Close popup, clear filter, or go back |
 | `mouse wheel` | Scroll view |
 
@@ -205,7 +215,7 @@ go run ./cmd/render deadlock     # Plain-text rendering to debug layouts
 │   ├── deadlock/       # API client, routes, evaluation, and hybrid generator
 │   ├── progression/    # Catalog, upgrade chains, and inventory simulation
 │   ├── lolalytics/     # LoL stats client
-│   ├── ddragon/        # Static data and Data Dragon images
+│   ├── ddragon/        # Static data and Data Dragon images (validated)
 │   ├── clean/          # Wilson scoring and build cleanup
 │   ├── ui/             # Bubble Tea views, cards, and navigation
 │   └── cache/          # On-disk cache (TTL, stale-if-error)
